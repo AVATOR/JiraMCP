@@ -1,16 +1,39 @@
 {
   "name": "jira-readonly-mcp",
-  "version": "0.1.0",
-  "private": true,
+  "version": "0.2.0",
   "type": "module",
-  "description": "Read-only MCP server for Jira Cloud",
+  "description": "Read-only MCP server for Jira Cloud and Confluence, with an interactive installer",
+  "license": "MIT",
+  "keywords": [
+    "mcp",
+    "jira",
+    "confluence",
+    "atlassian",
+    "claude",
+    "model-context-protocol"
+  ],
   "main": "dist/index.js",
+  "bin": {
+    "jira-mcp": "dist/index.js",
+    "jira-mcp-add": "dist/cli/add.js"
+  },
+  "publishConfig": {
+    "registry": "https://registry.npmjs.org",
+    "access": "public"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    ".env.example"
+  ],
   "scripts": {
     "build": "tsc -p tsconfig.json",
     "watch": "tsc -w -p tsconfig.json",
     "start": "node dist/index.js",
     "dev": "tsx src/index.ts",
-    "test": "npm run build && node --test dist/*.test.js"
+    "setup": "tsx src/cli/add.ts",
+    "test": "npm run build && node --test dist/*.test.js",
+    "prepublishOnly": "npm run build"
   },
   "engines": {
     "node": ">=20"
