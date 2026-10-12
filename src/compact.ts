@@ -1,6 +1,7 @@
 // Whitelists the useful parts of Jira REST payloads and renders them as Markdown.
 
 import { adfToMarkdown, isAdf, type AdfOptions } from "./adf.js";
+import { storageToMarkdown } from "./storage.js";
 
 export type CustomFieldMapping = {
   id: string;
@@ -24,6 +25,14 @@ function userName(user: any): string {
   }
 
   return user.emailAddress ? `${user.displayName} <${user.emailAddress}>` : user.displayName ?? "—";
+}
+
+function names(values: unknown): string {
+  return Array.isArray(values) ? values.map((value) => value?.name).filter(Boolean).join(", ") : "";
+}
+
+function cell(value: unknown): string {
+  return String(value ?? "").replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
 }
 
 function shortDate(value: unknown): string {
@@ -60,10 +69,15 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
     ["Status", fields.status?.name],
     ["Type", fields.issuetype?.name],
     ["Priority", fields.priority?.name],
+    ["Resolution", fields.resolution?.name],
     ["Assignee", userName(fields.assignee)],
     ["Reporter", userName(fields.reporter)],
     ["Project", fields.project?.key],
+    ["Parent", fields.parent ? `${fields.parent.key} — ${fields.parent.fields?.summary ?? ""}` : ""],
     ["Labels", (fields.labels ?? []).join(", ")],
+    ["Components", names(fields.components)],
+    ["Fix versions", names(fields.fixVersions)],
+    ["Due", fields.duedate ?? ""],
     ["Created", shortDate(fields.created)],
     ["Updated", shortDate(fields.updated)]
   ];
@@ -83,6 +97,14 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
 
   if (links.length) {
     lines.push("", "## Links", ...links);
+  }
+
+  const subtasks = (fields.subtasks ?? []).map(
+    (subtask: any) => `- ${subtask.key} — ${subtask.fields?.summary ?? ""} [${subtask.fields?.status?.name ?? ""}]`
+  );
+
+  if (subtasks.length) {
+    lines.push("", "## Subtasks", ...subtasks);
   }
 
   const description = fieldValue(fields.description, { full: true });
@@ -136,7 +158,7 @@ export function formatAttachments(attachments: any[], issueKey: string): string 
       fileSize(attachment.size),
       userName(attachment.author),
       shortDate(attachment.created)
-    ].map((cell) => String(cell).replace(/\|/g, "\\|"));
+    ].map(cell);
     return `| ${cells.join(" | ")} |`;
   });
 
@@ -183,6 +205,7 @@ export function formatComments(comments: any[], view: CommentView): string {
 export function formatSearch(result: any): string {
   const issues: any[] = result?.issues ?? [];
   const total = result?.total !== undefined ? ` of ${result.total}` : "";
+  const more = result?.nextPageToken && result?.isLast !== true;
   const rows = issues.map((issue) => {
     const f = issue.fields ?? {};
     const cells = [
@@ -193,19 +216,91 @@ export function formatSearch(result: any): string {
       f.priority?.name ?? "",
       f.assignee?.displayName ?? "—",
       shortDate(f.updated)
-    ].map((cell) => String(cell).replace(/\|/g, "\\|"));
+    ].map(cell);
     return `| ${cells.join(" | ")} |`;
   });
 
-  const lines = [`${issues.length}${total} issues`];
+  const lines = [`${issues.length}${total} issues${more ? " (more available)" : ""}`];
 
   if (rows.length) {
     lines.push("", "| Key | Summary | Status | Type | Priority | Assignee | Updated |", "|---|---|---|---|---|---|---|", ...rows);
   }
 
-  if (result?.nextPageToken) {
+  if (more) {
     lines.push("", `nextPageToken: ${result.nextPageToken}`);
   }
 
+  return lines.join("\n");
+}
+
+// v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
+export function formatConfluenceSearch(result: any): string {
+  const pages: any[] = result?.results ?? [];
+  const total = result?.totalSize !== undefined ? ` of ${result.totalSize}` : "";
+  const lines = [`${pages.length}${total} pages`];
+
+  if (pages.length) {
+    lines.push(
+      "",
+      "| Id | Title | Space | Modified |",
+      "|---|---|---|---|",
+      ...pages.map((page) => {
+        // The key is what confluence_get_space_pages takes; displayUrl is "/spaces/<KEY>".
+        const space =
+          page.resultGlobalContainer?.displayUrl?.match(/\/spaces\/([^/]+)/)?.[1] ??
+          page.content?.space?.key ??
+          page.resultGlobalContainer?.title ??
+          "";
+        return `| ${[page.content?.id, page.content?.title ?? page.title, space, shortDate(page.lastModified)].map(cell).join(" | ")} |`;
+      })
+    );
+  }
+
+  return lines.join("\n");
+}
+
+// v2 space pages: { results: [{ id, title, status, parentId, version: { createdAt } }], _links: { next } }.
+export function formatConfluenceSpacePages(result: any, spaceKey: string): string {
+  const pages: any[] = result?.results ?? [];
+  const lines = [`${spaceKey} — ${pages.length} pages`];
+
+  if (pages.length) {
+    lines.push(
+      "",
+      "| Id | Title | Parent | Modified |",
+      "|---|---|---|---|",
+      ...pages.map(
+        (page) =>
+          `| ${[page.id, page.title, page.parentId ?? "", shortDate(page.version?.createdAt)].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  const cursor = typeof result?._links?.next === "string" ? new URL(result._links.next, "http://x").searchParams.get("cursor") : null;
+  if (cursor) {
+    lines.push("", `cursor: ${cursor}`);
+  }
+
+  return lines.join("\n");
+}
+
+// v2 page with body-format=storage: { id, title, spaceId, parentId, version, body.storage.value, _links.webui }.
+export function formatConfluencePage(page: any, wikiBaseUrl: string): string {
+  const lines = [`# ${page?.title ?? ""}`, ""];
+  const meta: [string, string][] = [
+    ["Id", page?.id],
+    ["Space id", page?.spaceId],
+    ["Parent", page?.parentId],
+    ["Version", page?.version?.number !== undefined ? `${page.version.number} (${shortDate(page.version.createdAt)})` : ""],
+    ["Url", page?._links?.webui ? `${wikiBaseUrl}${page._links.webui}` : ""]
+  ];
+
+  for (const [label, value] of meta) {
+    if (value) {
+      lines.push(`- **${label}:** ${value}`);
+    }
+  }
+
+  lines.push("", storageToMarkdown(page?.body?.storage?.value ?? "") || "_(empty)_");
   return lines.join("\n");
 }

@@ -1,25 +1,46 @@
 #!/usr/bin/env node
-import "dotenv/config";
+import dotenv from "dotenv";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { mkdir, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   formatAttachments,
   formatComment,
+  formatConfluencePage,
+  formatConfluenceSearch,
+  formatConfluenceSpacePages,
   formatComments,
   formatIssue,
   formatSearch,
   type CustomFieldMapping
 } from "./compact.js";
 
+// Each project can carry its own .env in the directory the server is started from; only
+// when there is none, the .env next to the MCP code (dist/ or src/ -> ..) is used. The
+// files are never mixed, so one site's URL cannot pair with another site's token.
+// dotenv never overrides, so variables set by the client win; quiet keeps it from
+// writing to stdout, which carries the MCP protocol.
+const cwdEnv = path.resolve(".env");
+dotenv.config({
+  path: existsSync(cwdEnv) ? cwdEnv : path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+  quiet: true
+});
+
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
 const COMMENT_PAGE_SIZE = 100;
 // Bigger images blow up the context when base64-encoded, so they are only saved to disk.
 const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024;
+// Attachments are buffered in memory, so very large files are refused up front.
+const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
+const REQUEST_TIMEOUT_MS = 30_000;
+const MAX_RETRIES = 3;
+const MAX_ERROR_BODY_CHARS = 1000;
 const downloadDir = process.env.JIRA_ATTACHMENT_DIR?.trim() || path.join(os.tmpdir(), "jira-attachments");
 
 function sanitizeFileName(name: string): string {
@@ -46,9 +67,43 @@ const BASE_ISSUE_FIELDS = [
   "attachment",
   "project",
   "labels",
+  "parent",
+  "subtasks",
+  "components",
+  "fixVersions",
+  "resolution",
+  "duedate",
   "created",
   "updated"
 ];
+
+const SEARCH_FIELDS = "summary,status,issuetype,priority,assignee,project,created,updated";
+
+// JQL string literal; keeps keys like reserved words or odd characters from breaking the query.
+function jqlString(value: string): string {
+  return `"${value.replace(/\\/g, "\\\\").replace(/"/g, '\\"')}"`;
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Retry-After is either seconds or an HTTP date; fall back to exponential backoff.
+function retryDelayMs(response: Response, attempt: number): number {
+  const header = response.headers.get("retry-after");
+  const seconds = header ? Number(header) : NaN;
+
+  if (Number.isFinite(seconds)) {
+    return Math.min(seconds * 1000, 60_000);
+  }
+
+  const date = header ? Date.parse(header) : NaN;
+  if (Number.isFinite(date)) {
+    return Math.min(Math.max(date - Date.now(), 0), 60_000);
+  }
+
+  return 1000 * 2 ** attempt;
+}
 
 // Fields differ per Jira project, so they are configured per MCP connection via
 // JIRA_CUSTOM_FIELDS: "customfield_10145:requirements,customfield_10170:discoveryQuestions".
@@ -107,23 +162,30 @@ class JiraReadOnlyClient {
     return this.get(`/rest/api/3/issue/${encodeURIComponent(issueKey)}`, query);
   }
 
+  // /search/jql paginates with nextPageToken only; it ignores startAt and returns no total.
   async searchIssues(params: {
     jql: string;
     maxResults?: number;
-    startAt?: number;
+    nextPageToken?: string;
   }): Promise<JsonValue> {
-    return this.get("/rest/api/3/search/jql", {
+    const query: Record<string, string> = {
       jql: params.jql,
       maxResults: String(params.maxResults ?? 20),
-      startAt: String(params.startAt ?? 0),
-      fields: "summary,status,issuetype,priority,assignee,project,created,updated"
-    });
+      fields: SEARCH_FIELDS
+    };
+
+    if (params.nextPageToken) {
+      query.nextPageToken = params.nextPageToken;
+    }
+
+    return this.get("/rest/api/3/search/jql", query);
   }
 
-  async getProjectIssues(projectKey: string, maxResults?: number): Promise<JsonValue> {
+  async getProjectIssues(projectKey: string, maxResults?: number, nextPageToken?: string): Promise<JsonValue> {
     return this.searchIssues({
-      jql: `project = ${projectKey} ORDER BY updated DESC`,
-      maxResults
+      jql: `project = ${jqlString(projectKey)} ORDER BY updated DESC`,
+      maxResults,
+      nextPageToken
     });
   }
 
@@ -198,16 +260,19 @@ class JiraReadOnlyClient {
   async downloadAttachment(attachmentId: string): Promise<{ data: Buffer; mimeType: string }> {
     // Jira redirects attachment content to a signed media URL; fetch follows it and
     // drops the Authorization header cross-origin, which that URL does not need.
-    const url = `${this.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`;
-    const response = await fetch(url, {
-      headers: { Authorization: `Basic ${this.authHeader}` },
-      redirect: "follow"
-    });
+    const url = new URL(`${this.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`);
+    const response = await this.fetchWithRetry(url, "*/*");
 
     if (!response.ok) {
       throw new Error(
         `Jira attachment download failed (${response.status} ${response.statusText}) for attachment ${attachmentId}`
       );
+    }
+
+    const length = Number(response.headers.get("content-length"));
+    if (Number.isFinite(length) && length > MAX_DOWNLOAD_BYTES) {
+      await response.body?.cancel();
+      throw new Error(`Attachment ${attachmentId} is ${length} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);
     }
 
     return {
@@ -216,23 +281,62 @@ class JiraReadOnlyClient {
     };
   }
 
+  get confluenceBaseUrl(): string {
+    return `${this.baseUrl}/wiki`;
+  }
+
   async getConfluencePage(pageId: string): Promise<JsonValue> {
-    return this.get(`/wiki/api/v2/pages/${pageId}`, {
+    return this.get(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
       "body-format": "storage"
     });
   }
 
-  async searchConfluence(query: string): Promise<JsonValue> {
-    return this.get("/wiki/api/v2/pages", {
-      title: query
+  // The v2 pages endpoint only filters by exact title, so fuzzy search goes through v1 CQL.
+  async searchConfluence(query: string, limit: number): Promise<any> {
+    return this.get("/wiki/rest/api/search", {
+      cql: `type = page AND title ~ ${jqlString(query)} ORDER BY lastmodified DESC`,
+      limit: String(limit)
     });
   }
 
-  async getConfluenceSpacePages(spaceKey: string): Promise<JsonValue> {
-    // В API v2 поиск по spaceKey через query параметры
-    return this.get("/wiki/api/v2/pages", {
-      "space-key": spaceKey
-    });
+  // v2 lists pages by numeric space id, not by key, so the key is resolved first.
+  async getConfluenceSpacePages(spaceKey: string, limit: number, cursor?: string): Promise<any> {
+    const spaces: any = await this.get("/wiki/api/v2/spaces", { keys: spaceKey });
+    const spaceId = spaces?.results?.[0]?.id;
+
+    if (!spaceId) {
+      throw new Error(`Confluence space not found: ${spaceKey}`);
+    }
+
+    const query: Record<string, string> = { limit: String(limit), sort: "-modified-date" };
+    if (cursor) {
+      query.cursor = cursor;
+    }
+
+    return this.get(`/wiki/api/v2/spaces/${encodeURIComponent(spaceId)}/pages`, query);
+  }
+
+  // The single place that talks to Jira: GET only, with a timeout and retries on rate limiting.
+  private async fetchWithRetry(url: URL, accept: string): Promise<Response> {
+    for (let attempt = 0; ; attempt++) {
+      const response = await fetch(url, {
+        method: "GET",
+        headers: {
+          Accept: accept,
+          Authorization: `Basic ${this.authHeader}`
+        },
+        redirect: "follow",
+        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+      });
+
+      if ((response.status === 429 || response.status === 503) && attempt < MAX_RETRIES) {
+        await response.body?.cancel();
+        await sleep(retryDelayMs(response, attempt));
+        continue;
+      }
+
+      return response;
+    }
   }
 
   private async get(path: string, query?: Record<string, string>): Promise<JsonValue> {
@@ -244,24 +348,19 @@ class JiraReadOnlyClient {
       }
     }
 
-    const response = await fetch(url, {
-      method: "GET",
-      headers: {
-        Accept: "application/json",
-        Authorization: `Basic ${this.authHeader}`
-      }
-    });
-
-    const contentType = response.headers.get("content-type") ?? "";
-    const responseBody = contentType.includes("application/json")
-      ? ((await response.json()) as JsonValue)
-      : ((await response.text()) as JsonValue);
+    const response = await this.fetchWithRetry(url, "application/json");
 
     if (!response.ok) {
-      throw new Error(`Jira request failed (${response.status} ${response.statusText}): ${JSON.stringify(responseBody)}`);
+      // Error pages can be full HTML documents; keep only the start of them.
+      const text = await response.text();
+      const detail = text.length > MAX_ERROR_BODY_CHARS ? `${text.slice(0, MAX_ERROR_BODY_CHARS)}…` : text;
+      throw new Error(`Jira request failed (${response.status} ${response.statusText}) for ${path}: ${detail}`);
     }
 
-    return responseBody;
+    const contentType = response.headers.get("content-type") ?? "";
+    return contentType.includes("application/json")
+      ? ((await response.json()) as JsonValue)
+      : ((await response.text()) as JsonValue);
   }
 }
 
@@ -323,6 +422,10 @@ function toMarkdownResult(text: string) {
 }
 
 const rawFlag = z.boolean().optional().describe("Return the unprocessed Jira JSON (debugging only; large).");
+const nextPageTokenParam = z
+  .string()
+  .optional()
+  .describe("Token from the previous result's nextPageToken line, to fetch the next page.");
 
 async function main() {
   const client = new JiraReadOnlyClient({
@@ -341,7 +444,7 @@ async function main() {
 
   const server = new McpServer({
     name: "jira-readonly",
-    version: "0.1.0"
+    version: "0.2.0"
   });
 
   server.registerTool(
@@ -368,11 +471,11 @@ async function main() {
       inputSchema: {
         jql: z.string().min(1),
         maxResults: z.number().int().min(1).max(100).optional(),
-        startAt: z.number().int().min(0).optional()
+        nextPageToken: nextPageTokenParam
       }
     },
-    async ({ jql, maxResults, startAt }) =>
-      toMarkdownResult(formatSearch(await client.searchIssues({ jql, maxResults, startAt })))
+    async ({ jql, maxResults, nextPageToken }) =>
+      toMarkdownResult(formatSearch(await client.searchIssues({ jql, maxResults, nextPageToken })))
   );
 
   server.registerTool(
@@ -382,17 +485,18 @@ async function main() {
       description: "List issues from a Jira project ordered by last update.",
       inputSchema: {
         projectKey: z.string().min(1).optional(),
-        maxResults: z.number().int().min(1).max(100).optional()
+        maxResults: z.number().int().min(1).max(100).optional(),
+        nextPageToken: nextPageTokenParam
       }
     },
-    async ({ projectKey, maxResults }) => {
+    async ({ projectKey, maxResults, nextPageToken }) => {
       const resolvedProject = projectKey ?? client.defaultProject;
 
       if (!resolvedProject) {
         throw new Error("projectKey is required when JIRA_DEFAULT_PROJECT is not set");
       }
 
-      return toMarkdownResult(formatSearch(await client.getProjectIssues(resolvedProject, maxResults)));
+      return toMarkdownResult(formatSearch(await client.getProjectIssues(resolvedProject, maxResults, nextPageToken)));
     }
   );
 
@@ -400,36 +504,51 @@ async function main() {
     "confluence_get_page",
     {
       title: "Get Confluence page",
-      description: "Fetch a Confluence page by ID in read-only mode.",
+      description: "Fetch a Confluence page by ID as Markdown in read-only mode.",
       inputSchema: {
-        pageId: z.string().describe("The ID of the Confluence page")
+        pageId: z.string().min(1).describe("The ID of the Confluence page"),
+        raw: rawFlag
       }
     },
-    async ({ pageId }) => toTextResult(await client.getConfluencePage(pageId))
+    async ({ pageId, raw }) => {
+      const page = await client.getConfluencePage(pageId);
+      return raw ? toTextResult(page) : toMarkdownResult(formatConfluencePage(page, client.confluenceBaseUrl));
+    }
   );
 
   server.registerTool(
     "confluence_search_pages",
     {
       title: "Search Confluence pages",
-      description: "Search for Confluence pages by title.",
+      description: "Search Confluence pages whose title contains the query (newest first).",
       inputSchema: {
-        query: z.string().min(1).describe("The search query (title)")
+        query: z.string().min(1).describe("Words to look for in the page title"),
+        limit: z.number().int().min(1).max(100).optional().describe("Max pages to return (default 25)."),
+        raw: rawFlag
       }
     },
-    async ({ query }) => toTextResult(await client.searchConfluence(query))
+    async ({ query, limit, raw }) => {
+      const result = await client.searchConfluence(query, limit ?? 25);
+      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceSearch(result));
+    }
   );
 
   server.registerTool(
     "confluence_get_space_pages",
     {
       title: "Get Confluence space pages",
-      description: "List pages in a Confluence space.",
+      description: "List pages in a Confluence space, most recently modified first.",
       inputSchema: {
-        spaceKey: z.string().min(1).describe("The space key (e.g., 'MS')")
+        spaceKey: z.string().min(1).describe("The space key (e.g., 'MS')"),
+        limit: z.number().int().min(1).max(250).optional().describe("Max pages to return (default 50)."),
+        cursor: z.string().optional().describe("Cursor from the previous result, to fetch the next page."),
+        raw: rawFlag
       }
     },
-    async ({ spaceKey }) => toTextResult(await client.getConfluenceSpacePages(spaceKey))
+    async ({ spaceKey, limit, cursor, raw }) => {
+      const result = await client.getConfluenceSpacePages(spaceKey, limit ?? 50, cursor);
+      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceSpacePages(result, spaceKey));
+    }
   );
 
   server.registerTool(
@@ -517,7 +636,10 @@ async function main() {
         outputPath: z
           .string()
           .optional()
-          .describe("Where to save the file; defaults to JIRA_ATTACHMENT_DIR or the system temp dir."),
+          .describe(
+            "File or existing directory to save into; defaults to JIRA_ATTACHMENT_DIR or the system temp dir. " +
+              "Existing files are never overwritten."
+          ),
         inline: z
           .boolean()
           .optional()
@@ -526,14 +648,30 @@ async function main() {
     },
     async ({ attachmentId, outputPath, inline }) => {
       const meta = await client.getAttachmentMeta(attachmentId);
+      if (Number(meta?.size) > MAX_DOWNLOAD_BYTES) {
+        throw new Error(`Attachment ${attachmentId} is ${meta.size} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);
+      }
+
       const { data, mimeType } = await client.downloadAttachment(attachmentId);
       const resolvedMime = meta?.mimeType || mimeType;
-      const target = outputPath
-        ? path.resolve(outputPath)
-        : path.join(downloadDir, `${attachmentId}-${sanitizeFileName(meta?.filename ?? attachmentId)}`);
+      const fileName = `${attachmentId}-${sanitizeFileName(meta?.filename ?? attachmentId)}`;
+      let target = path.join(downloadDir, fileName);
+
+      if (outputPath) {
+        const resolved = path.resolve(outputPath.replace(/^~(?=$|[\\/])/, os.homedir()));
+        const isDir = await stat(resolved).then((entry) => entry.isDirectory(), () => false);
+        target = isDir ? path.join(resolved, fileName) : resolved;
+      }
 
       await mkdir(path.dirname(target), { recursive: true });
-      await writeFile(target, data);
+      // Attachment content is untrusted, so an explicit path must not clobber an existing file
+      // (e.g. a shell profile); the default download dir is ours and may be overwritten.
+      await writeFile(target, data, { flag: outputPath ? "wx" : "w" }).catch((error) => {
+        if (error?.code === "EEXIST") {
+          throw new Error(`Refusing to overwrite existing file: ${target}`);
+        }
+        throw error;
+      });
 
       const isImage = resolvedMime.startsWith("image/");
       const tooLarge = data.byteLength > MAX_INLINE_IMAGE_BYTES;

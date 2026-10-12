@@ -126,6 +126,8 @@ function renderBlock(node: AdfNode, options: AdfOptions, depth: number): string 
       return `${"#".repeat(Math.min(Number(node.attrs?.level ?? 1), 6))} ${renderInline(node.content)}`;
     case "bulletList":
     case "orderedList":
+    case "taskList":
+    case "decisionList":
       return renderList(node, options, depth);
     case "codeBlock": {
       const code = collapseIfPayload(renderInline(node.content), options, true);
@@ -159,26 +161,68 @@ function renderBlock(node: AdfNode, options: AdfOptions, depth: number): string 
     case "media":
       return renderInlineNode(node);
     default:
-      // Unknown node: keep whatever text it contains rather than failing.
-      return node.content ? renderChildren(node, options, depth) : node.text ?? "";
+      // Unknown node: keep whatever text it contains rather than failing. Inline-only
+      // children must not be split into separate paragraphs.
+      if (!node.content) {
+        return node.text ?? "";
+      }
+      return node.content.every(isInline) ? renderInline(node.content) : renderChildren(node, options, depth);
+  }
+}
+
+const INLINE_TYPES = new Set([
+  "text",
+  "hardBreak",
+  "mention",
+  "emoji",
+  "inlineCard",
+  "status",
+  "date",
+  "mediaInline",
+  "placeholder"
+]);
+
+function isInline(node: AdfNode): boolean {
+  return INLINE_TYPES.has(node.type ?? "");
+}
+
+const NESTED_LIST_TYPES = new Set(["bulletList", "orderedList", "taskList", "decisionList"]);
+
+function listBullet(node: AdfNode, item: AdfNode, index: number): string {
+  switch (node.type) {
+    case "orderedList":
+      return `${index}.`;
+    case "taskList":
+      return item.attrs?.state === "DONE" ? "- [x]" : "- [ ]";
+    case "decisionList":
+      return "- ✓";
+    default:
+      return "-";
   }
 }
 
 function renderList(node: AdfNode, options: AdfOptions, depth: number): string {
   const indent = "  ".repeat(depth);
-  const ordered = node.type === "orderedList";
   let index = Number(node.attrs?.order ?? 1);
 
   return (node.content ?? [])
     .map((item) => {
-      const bullet = ordered ? `${index++}.` : "-";
-      const parts = (item.content ?? []).map((child) =>
-        child.type === "bulletList" || child.type === "orderedList"
-          ? renderList(child, options, depth + 1)
-          : renderBlock(child, options, depth + 1)
-      );
+      const bullet = listBullet(node, item, index++);
+      const children = item.content ?? [];
+      // taskItem / decisionItem hold inline content directly instead of paragraphs.
+      const parts = children.every(isInline)
+        ? [renderInline(children)]
+        : children.map((child) =>
+            NESTED_LIST_TYPES.has(child.type ?? "")
+              ? renderList(child, options, depth + 1)
+              : indentTail(renderBlock(child, options, depth + 1), `${indent}  `)
+          );
       const [first = "", ...rest] = parts;
-      return [`${indent}${bullet} ${first}`, ...rest].join("\n");
+      // Continuation blocks (a second paragraph, a code block) stay indented under their bullet.
+      const continued = rest.map((part, i) =>
+        NESTED_LIST_TYPES.has(children[i + 1]?.type ?? "") ? part : `${indent}  ${part}`
+      );
+      return [`${indent}${bullet} ${first}`, ...continued].join("\n");
     })
     .join("\n");
 }
@@ -198,6 +242,11 @@ function renderTable(node: AdfNode, options: AdfOptions): string {
   const line = (cells: string[]) => `| ${Array.from({ length: width }, (_, i) => cells[i] ?? "").join(" | ")} |`;
 
   return [line(rows[0]), line(Array(width).fill("---")), ...rows.slice(1).map(line)].join("\n");
+}
+
+// Indents every line but the first, which follows the bullet or the caller's own indent.
+function indentTail(text: string, prefix: string): string {
+  return text.replace(/\n/g, `\n${prefix}`);
 }
 
 function prefixLines(text: string, prefix: string): string {

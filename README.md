@@ -4,11 +4,12 @@ TypeScript MCP server for Jira Cloud with read-only access.
 
 ## Capabilities
 
-- Read a Jira issue by key
-- Search issues by JQL
+- Read a Jira issue by key (incl. parent, subtasks, links, components, configured custom fields)
+- Search issues by JQL, with `nextPageToken` pagination
 - List project issues
-- Read comments for an issue
-- Read transitions and issue metadata exposed by Jira REST GET endpoints
+- Read comments for an issue (newest first, date filter, truncation of large payloads)
+- List and download issue attachments (images are returned inline)
+- Read Confluence pages as Markdown, search them by title and list a space's pages
 
 This server does not expose any methods for creating or updating issues, comments, transitions, or any other Jira entities.
 
@@ -24,9 +25,9 @@ Required variables:
 
 Optional variables:
 
-- `JIRA_DEFAULT_PROJECT`
-- `JIRA_CUSTOM_FIELDS`
-- `JIRA_ATTACHMENT_DIR`
+- `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
+- `JIRA_CUSTOM_FIELDS` — see below
+- `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
 
 ### Getting a Jira API token
 
@@ -82,6 +83,11 @@ fields are returned.
 
 ## Install
 
+Requires Node.js 20+; Node 24 LTS is recommended. In a checkout the version is
+pinned for both [nvm](https://github.com/nvm-sh/nvm) (`.nvmrc`) and
+[Volta](https://volta.sh) (`volta` in `package.json`): run `nvm use` in the project
+directory, or let Volta switch automatically.
+
 ```bash
 npm install -D jira-readonly-mcp
 npx jira-mcp-add
@@ -122,8 +128,11 @@ run it manually:
 npx jira-mcp
 ```
 
-Started this way the server reads `JIRA_*` from the environment, including a
-`.env` file in the current directory.
+Started this way the server reads `JIRA_*` from the environment and from a `.env`
+file in the current directory, so each project can keep its own Jira settings. Only
+when the current directory has no `.env`, the one next to the server code (the
+project root of a checkout) is used instead; the two files are never mixed.
+Variables set by the client (its `env` config) take precedence over the file.
 
 For local development from a checkout:
 
@@ -140,12 +149,17 @@ npm run setup    # run the setup wizard from source
 - `jira_search_issues`
 - `jira_get_project_issues`
 - `jira_get_comments`
+- `jira_list_attachments`
+- `jira_download_attachment`
 - `confluence_get_page`
 - `confluence_search_pages`
 - `confluence_get_space_pages`
 
 ## Security model
 
-- The server uses Jira REST API GET endpoints only.
-- The HTTP client rejects non-GET methods at runtime.
+- The server uses Jira/Confluence REST API GET endpoints only; every request goes through
+  a single GET-only client (30 s timeout, retries on HTTP 429/503 honouring `Retry-After`).
 - No MCP tools for mutations are registered.
+- The only local side effect is `jira_download_attachment` writing a file. An explicit
+  `outputPath` never overwrites an existing file, since attachment content is untrusted.
+  Downloads above 100 MB are refused.

@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { adfToMarkdown } from "./adf.js";
-import { formatComments, formatIssue } from "./compact.js";
+import { formatComments, formatConfluenceSpacePages, formatIssue, formatSearch } from "./compact.js";
 
 const doc = (...content: any[]) => ({ type: "doc", version: 1, content });
 const p = (...content: any[]) => ({ type: "paragraph", attrs: { localId: "abc" }, content });
@@ -107,4 +107,54 @@ test("issue: single description and custom field alias", () => {
   assert.match(md, /## requirements \(customfield_1\)\nReq/);
   assert.match(md, /- blocks: ASGC-1 — S \[Open\]/);
   assert.doesNotMatch(md, /iconUrl|https:\/\/i/);
+});
+
+test("task list and inline-only unknown nodes", () => {
+  const task = (state: string, ...content: any[]) => ({ type: "taskItem", attrs: { state }, content });
+  const md = adfToMarkdown(
+    doc({ type: "taskList", content: [task("DONE", t("ship "), t("it", "strong")), task("TODO", t("test"))] })
+  );
+  assert.equal(md, "- [x] ship **it**\n- [ ] test");
+  assert.equal(adfToMarkdown(doc({ type: "futureInline", content: [t("a "), t("b")] })), "a b");
+});
+
+test("list item continuation blocks stay under their bullet", () => {
+  const li = (...content: any[]) => ({ type: "listItem", content });
+  const md = adfToMarkdown(doc({ type: "bulletList", content: [li(p(t("first")), p(t("second"))), li(p(t("next")))] }));
+  assert.equal(md, "- first\n  second\n- next");
+});
+
+test("search shows nextPageToken only when more pages exist", () => {
+  const issues = [{ key: "A-1", fields: { summary: "x|y" } }];
+  assert.match(formatSearch({ issues, nextPageToken: "tok", isLast: false }), /more available[\s\S]*nextPageToken: tok/);
+  assert.doesNotMatch(formatSearch({ issues, nextPageToken: "tok", isLast: true }), /nextPageToken/);
+  assert.match(formatSearch({ issues }), /x\\\|y/);
+});
+
+test("issue shows parent, subtasks, components", () => {
+  const md = formatIssue(
+    {
+      key: "A-2",
+      fields: {
+        summary: "S",
+        parent: { key: "A-1", fields: { summary: "Epic" } },
+        components: [{ name: "API" }, { name: "Web" }],
+        subtasks: [{ key: "A-3", fields: { summary: "Sub", status: { name: "Open" } } }]
+      }
+    },
+    []
+  );
+  assert.match(md, /\*\*Parent:\*\* A-1 — Epic/);
+  assert.match(md, /\*\*Components:\*\* API, Web/);
+  assert.match(md, /## Subtasks\n- A-3 — Sub \[Open\]/);
+});
+
+test("confluence space pages expose the next cursor", () => {
+  const md = formatConfluenceSpacePages(
+    { results: [{ id: "1", title: "Home" }], _links: { next: "/wiki/api/v2/spaces/9/pages?cursor=abc&limit=1" } },
+    "MS"
+  );
+  assert.match(md, /^MS — 1 pages/);
+  assert.match(md, /\| 1 \| Home \|/);
+  assert.match(md, /cursor: abc/);
 });
