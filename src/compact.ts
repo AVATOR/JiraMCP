@@ -24,15 +24,22 @@ function userName(user: any): string {
     return "—";
   }
 
-  return user.emailAddress ? `${user.displayName} <${user.emailAddress}>` : user.displayName ?? "—";
+  return user.emailAddress ? `${user.displayName} <${user.emailAddress}>` : (user.displayName ?? "—");
 }
 
 function names(values: unknown): string {
-  return Array.isArray(values) ? values.map((value) => value?.name).filter(Boolean).join(", ") : "";
+  return Array.isArray(values)
+    ? values
+        .map((value) => value?.name)
+        .filter(Boolean)
+        .join(", ")
+    : "";
 }
 
 function cell(value: unknown): string {
-  return String(value ?? "").replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
+  const text =
+    typeof value === "string" || typeof value === "number" ? String(value) : value == null ? "" : JSON.stringify(value);
+  return text.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
 }
 
 function shortDate(value: unknown): string {
@@ -50,7 +57,10 @@ function fieldValue(value: any, options: AdfOptions = {}): string {
   }
 
   if (Array.isArray(value)) {
-    return value.map((entry) => fieldValue(entry, options)).filter(Boolean).join(", ");
+    return value
+      .map((entry) => fieldValue(entry, options))
+      .filter(Boolean)
+      .join(", ");
   }
 
   if (typeof value === "object") {
@@ -184,7 +194,8 @@ function truncate(text: string, maxLength: number, commentId: string): string {
 export function formatComment(comment: any, view: Pick<CommentView, "maxLength" | "full">): string {
   const id = String(comment.id);
   const body = adfToMarkdown(comment.body, { full: view.full, commentId: id });
-  const edited = comment.updated && comment.updated !== comment.created ? ` (edited ${shortDate(comment.updated)})` : "";
+  const edited =
+    comment.updated && comment.updated !== comment.created ? ` (edited ${shortDate(comment.updated)})` : "";
   const header = `### ${shortDate(comment.created)} — ${userName(comment.author)}${edited} · id ${id}`;
 
   return `${header}\n${view.full ? body : truncate(body, view.maxLength, id)}`;
@@ -223,7 +234,12 @@ export function formatSearch(result: any): string {
   const lines = [`${issues.length}${total} issues${more ? " (more available)" : ""}`];
 
   if (rows.length) {
-    lines.push("", "| Key | Summary | Status | Type | Priority | Assignee | Updated |", "|---|---|---|---|---|---|---|", ...rows);
+    lines.push(
+      "",
+      "| Key | Summary | Status | Type | Priority | Assignee | Updated |",
+      "|---|---|---|---|---|---|---|",
+      ...rows
+    );
   }
 
   if (more) {
@@ -276,7 +292,10 @@ export function formatConfluenceSpacePages(result: any, spaceKey: string): strin
     );
   }
 
-  const cursor = typeof result?._links?.next === "string" ? new URL(result._links.next, "http://x").searchParams.get("cursor") : null;
+  const cursor =
+    typeof result?._links?.next === "string"
+      ? new URL(result._links.next, "http://x").searchParams.get("cursor")
+      : null;
   if (cursor) {
     lines.push("", `cursor: ${cursor}`);
   }
@@ -291,7 +310,10 @@ export function formatConfluencePage(page: any, wikiBaseUrl: string): string {
     ["Id", page?.id],
     ["Space id", page?.spaceId],
     ["Parent", page?.parentId],
-    ["Version", page?.version?.number !== undefined ? `${page.version.number} (${shortDate(page.version.createdAt)})` : ""],
+    [
+      "Version",
+      page?.version?.number !== undefined ? `${page.version.number} (${shortDate(page.version.createdAt)})` : ""
+    ],
     ["Url", page?._links?.webui ? `${wikiBaseUrl}${page._links.webui}` : ""]
   ];
 

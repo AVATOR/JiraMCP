@@ -97,7 +97,12 @@ test("issue: single description and custom field alias", () => {
         status: { name: "Done", iconUrl: "https://i" },
         description: doc(p(t("Desc"))),
         customfield_1: doc(p(t("Req"))),
-        issuelinks: [{ type: { outward: "blocks" }, outwardIssue: { key: "ASGC-1", fields: { summary: "S", status: { name: "Open" } } } }]
+        issuelinks: [
+          {
+            type: { outward: "blocks" },
+            outwardIssue: { key: "ASGC-1", fields: { summary: "S", status: { name: "Open" } } }
+          }
+        ]
       }
     },
     [{ id: "customfield_1", alias: "requirements" }]
@@ -126,7 +131,10 @@ test("list item continuation blocks stay under their bullet", () => {
 
 test("search shows nextPageToken only when more pages exist", () => {
   const issues = [{ key: "A-1", fields: { summary: "x|y" } }];
-  assert.match(formatSearch({ issues, nextPageToken: "tok", isLast: false }), /more available[\s\S]*nextPageToken: tok/);
+  assert.match(
+    formatSearch({ issues, nextPageToken: "tok", isLast: false }),
+    /more available[\s\S]*nextPageToken: tok/
+  );
   assert.doesNotMatch(formatSearch({ issues, nextPageToken: "tok", isLast: true }), /nextPageToken/);
   assert.match(formatSearch({ issues }), /x\\\|y/);
 });

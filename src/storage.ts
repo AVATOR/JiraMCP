@@ -11,7 +11,15 @@ const VOID_TAGS = new Set(["br", "hr", "img", "col", "input", "meta", "link"]);
 const BLOCK_TAGS = new Set(["p", "div", "section", "article", "ac:layout", "ac:layout-section", "ac:layout-cell"]);
 const LIST_TAGS = new Set(["ul", "ol", "ac:task-list"]);
 const PANEL_MACROS = new Set(["info", "note", "warning", "tip", "panel"]);
-const SILENT_MACROS = new Set(["toc", "anchor", "children", "pagetree", "recently-updated", "attachments", "contributors"]);
+const SILENT_MACROS = new Set([
+  "toc",
+  "anchor",
+  "children",
+  "pagetree",
+  "recently-updated",
+  "attachments",
+  "contributors"
+]);
 
 const ENTITIES: Record<string, string> = {
   amp: "&",
@@ -229,7 +237,9 @@ function renderMacro(node: StorageNode, depth: number): string {
 
   if (name === "expand") {
     const title = macroParam(node, "title");
-    return block([title ? `**${title}**` : "", body ? renderChildren(body, depth).trim() : ""].filter(Boolean).join("\n\n"));
+    return block(
+      [title ? `**${title}**` : "", body ? renderChildren(body, depth).trim() : ""].filter(Boolean).join("\n\n")
+    );
   }
 
   if (name === "jira") {
@@ -330,7 +340,9 @@ function renderList(node: StorageNode, depth: number): string {
 
       const [first = "", ...rest] = parts;
       const head = first.startsWith("\u0000") ? `${indent}${bullet}\n${first.slice(1)}` : `${indent}${bullet} ${first}`;
-      return [head, ...rest.map((part) => (part.startsWith("\u0000") ? part.slice(1) : `${indent}  ${part}`))].join("\n");
+      return [head, ...rest.map((part) => (part.startsWith("\u0000") ? part.slice(1) : `${indent}  ${part}`))].join(
+        "\n"
+      );
     })
     .join("\n");
 }

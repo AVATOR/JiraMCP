@@ -133,7 +133,11 @@ test("jira_search_issues passes JQL, page size and token through", async () => {
       json({ issues: [{ key: "ABC-1", fields: { summary: "One" } }], nextPageToken: "next", isLast: false })
   });
 
-  const { text } = await call(client, "jira_search_issues", { jql: "assignee = currentUser()", maxResults: 5, nextPageToken: "prev" });
+  const { text } = await call(client, "jira_search_issues", {
+    jql: "assignee = currentUser()",
+    maxResults: 5,
+    nextPageToken: "prev"
+  });
 
   assert.match(text, /\| ABC-1 \| One \|/);
   assert.match(text, /nextPageToken: next/);
@@ -194,7 +198,8 @@ test("rate-limited requests are retried", async () => {
 
 test("rate limiting gives up after the retry budget", async () => {
   const { client, calls } = await connect({
-    "/rest/api/3/issue/ABC-1": () => new Response("busy", { status: 503, statusText: "Service Unavailable", headers: { "retry-after": "0" } })
+    "/rest/api/3/issue/ABC-1": () =>
+      new Response("busy", { status: 503, statusText: "Service Unavailable", headers: { "retry-after": "0" } })
   });
 
   const { result } = await call(client, "jira_get_issue", { issueKey: "ABC-1" });
@@ -240,7 +245,11 @@ test("jira_get_comments with since walks pages until older comments appear", asy
   const pages: Record<string, unknown> = {
     "0": {
       total: 150,
-      comments: Array.from({ length: 100 }, (_, i) => ({ id: String(200 - i), created: "2026-03-01T00:00:00", body: "new" }))
+      comments: Array.from({ length: 100 }, (_, i) => ({
+        id: String(200 - i),
+        created: "2026-03-01T00:00:00",
+        body: "new"
+      }))
     },
     "100": {
       total: 150,
@@ -254,7 +263,12 @@ test("jira_get_comments with since walks pages until older comments appear", asy
     "/rest/api/3/issue/ABC-1/comment": (url) => json(pages[url.searchParams.get("startAt")!])
   });
 
-  const { text } = await call(client, "jira_get_comments", { issueKey: "ABC-1", since: "2026-01-01", limit: 3, order: "asc" });
+  const { text } = await call(client, "jira_get_comments", {
+    issueKey: "ABC-1",
+    since: "2026-01-01",
+    limit: 3,
+    order: "asc"
+  });
 
   assert.equal(calls.length, 2);
   assert.match(text, /showing 3 of 101 comments \(oldest first, since 2026-01-01\)/);
@@ -297,7 +311,8 @@ const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 
 function attachmentRoutes(meta: Record<string, unknown>) {
   return {
-    "/rest/api/3/attachment/10": () => json({ id: "10", filename: "my shot.png", mimeType: "image/png", size: PNG.length, ...meta }),
+    "/rest/api/3/attachment/10": () =>
+      json({ id: "10", filename: "my shot.png", mimeType: "image/png", size: PNG.length, ...meta }),
     "/rest/api/3/attachment/content/10": () =>
       new Response(PNG, { headers: { "content-type": "image/png", "content-length": String(PNG.length) } })
   };
