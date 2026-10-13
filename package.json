@@ -36,7 +36,8 @@
     "dev": "tsx src/index.ts",
     "setup": "tsx src/cli/add.ts",
     "test": "npm run build && node --test dist/*.test.js",
-    "prepublishOnly": "npm run build"
+    "prepublishOnly": "npm run build",
+    "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true"
   },
   "engines": {
     "node": ">=20"
