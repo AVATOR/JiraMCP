@@ -249,6 +249,25 @@ export function formatSearch(result: any): string {
   return lines.join("\n");
 }
 
+// /rest/api/3/field: [{ id, name, custom, schema: { type } }].
+export function formatFields(fields: any[]): string {
+  const lines = [`${fields.length} fields`];
+
+  if (fields.length) {
+    lines.push(
+      "",
+      "| Id | Name | Type | Custom |",
+      "|---|---|---|---|",
+      ...fields.map(
+        (field) =>
+          `| ${[field.id, field.name, field.schema?.type ?? "", field.custom ? "yes" : ""].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
+}
+
 // v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
 export function formatConfluenceSearch(result: any): string {
   const pages: any[] = result?.results ?? [];

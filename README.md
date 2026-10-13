@@ -9,7 +9,8 @@ TypeScript MCP server for Jira Cloud with read-only access.
 - List project issues
 - Read comments for an issue (newest first, date filter, truncation of large payloads)
 - List and download issue attachments (images are returned inline)
-- Read Confluence pages as Markdown, search them by title and list a space's pages
+- Find field ids (including `customfield_*`) by name
+- Read Confluence pages as Markdown, full-text search them (optionally per space) and list a space's pages
 
 This server does not expose any methods for creating or updating issues, comments, transitions, or any other Jira entities.
 
@@ -75,8 +76,8 @@ Listed fields are requested by `jira_get_issue` and exposed under their alias in
 both `fields` and `renderedFields` (the latter holds the HTML rendering, which is
 usually the readable one). The raw ids stay in the response as well.
 
-To discover the ids available on a Jira instance, call `/rest/api/3/field` and
-match on the field name.
+To discover the ids available on a Jira instance, ask the agent to call
+`jira_list_fields` with a name filter (e.g. `query: "requirements"`).
 
 If the variable is unset, no custom fields are requested and only the base issue
 fields are returned.
@@ -151,6 +152,7 @@ npm run setup    # run the setup wizard from source
 - `jira_get_comments`
 - `jira_list_attachments`
 - `jira_download_attachment`
+- `jira_list_fields`
 - `confluence_get_page`
 - `confluence_search_pages`
 - `confluence_get_space_pages`
@@ -159,7 +161,9 @@ npm run setup    # run the setup wizard from source
 
 - The server uses Jira/Confluence REST API GET endpoints only; every request goes through
   a single GET-only client (30 s timeout, retries on HTTP 429/503 honouring `Retry-After`).
-- No MCP tools for mutations are registered.
+- No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
+- Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
+  server instructions tell the client not to follow instructions found in it.
 - The only local side effect is `jira_download_attachment` writing a file. An explicit
   `outputPath` never overwrites an existing file, since attachment content is untrusted.
   Downloads above 100 MB are refused.
