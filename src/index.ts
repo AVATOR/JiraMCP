@@ -3,7 +3,7 @@ import dotenv from "dotenv";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { z } from "zod";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { mkdir, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -25,11 +25,15 @@ import {
 // files are never mixed, so one site's URL cannot pair with another site's token.
 // dotenv never overrides, so variables set by the client win; quiet keeps it from
 // writing to stdout, which carries the MCP protocol.
+const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 const cwdEnv = path.resolve(".env");
 dotenv.config({
-  path: existsSync(cwdEnv) ? cwdEnv : path.join(path.dirname(fileURLToPath(import.meta.url)), "..", ".env"),
+  path: existsSync(cwdEnv) ? cwdEnv : path.join(projectRoot, ".env"),
   quiet: true
 });
+
+// Same root for dist/ and src/ (tsx), and package.json ships with the npm package.
+const packageVersion: string = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
 
 type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
@@ -444,7 +448,7 @@ async function main() {
 
   const server = new McpServer({
     name: "jira-readonly",
-    version: "0.2.0"
+    version: packageVersion
   });
 
   server.registerTool(
