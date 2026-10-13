@@ -25,7 +25,12 @@ test("formatIssue renders meta, links, description and aliased custom fields", (
         assignee: { displayName: "Ann", emailAddress: "ann@example.com" },
         labels: ["auth", "web"],
         created: "2026-09-18T11:12:13.000+0000",
-        issuelinks: [{ type: { outward: "blocks" }, outwardIssue: { key: "ABC-2", fields: { summary: "Other", status: { name: "Done" } } } }],
+        issuelinks: [
+          {
+            type: { outward: "blocks" },
+            outwardIssue: { key: "ABC-2", fields: { summary: "Other", status: { name: "Done" } } }
+          }
+        ],
         description: adf("Steps here"),
         customfield_1: { value: "High" }
       }
@@ -81,13 +86,22 @@ test("formatComments truncates long bodies and points at the full view", () => {
 test("Confluence search and space listings", () => {
   const search = formatConfluenceSearch({
     totalSize: 5,
-    results: [{ content: { id: "1", title: "Home" }, resultGlobalContainer: { displayUrl: "/spaces/MS" }, lastModified: "2026-02-03T04:05:06" }]
+    results: [
+      {
+        content: { id: "1", title: "Home" },
+        resultGlobalContainer: { displayUrl: "/spaces/MS" },
+        lastModified: "2026-02-03T04:05:06"
+      }
+    ]
   });
   assert.match(search, /^1 of 5 pages/);
   assert.match(search, /\| 1 \| Home \| MS \| 2026-02-03 04:05 \|/);
 
   const space = formatConfluenceSpacePages(
-    { results: [{ id: "2", title: "Child", parentId: "1" }], _links: { next: "/wiki/api/v2/spaces/9/pages?cursor=abc&limit=1" } },
+    {
+      results: [{ id: "2", title: "Child", parentId: "1" }],
+      _links: { next: "/wiki/api/v2/spaces/9/pages?cursor=abc&limit=1" }
+    },
     "MS"
   );
   assert.match(space, /^MS — 1 pages/);

@@ -35,7 +35,7 @@ export function adfToMarkdown(node: unknown, options: AdfOptions = {}): string {
     return node;
   }
 
-  return renderBlock(node as AdfNode, options, 0)
+  return renderBlock(node, options, 0)
     .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
@@ -229,9 +229,7 @@ function renderList(node: AdfNode, options: AdfOptions, depth: number): string {
 
 function renderTable(node: AdfNode, options: AdfOptions): string {
   const rows = (node.content ?? []).map((row) =>
-    (row.content ?? []).map((cell) =>
-      renderChildren(cell, options, 0, " ").replace(/\n+/g, " ").replace(/\|/g, "\\|")
-    )
+    (row.content ?? []).map((cell) => renderChildren(cell, options, 0, " ").replace(/\n+/g, " ").replace(/\|/g, "\\|"))
   );
 
   if (!rows.length) {
@@ -258,7 +256,7 @@ function prefixLines(text: string, prefix: string): string {
 
 function looksLikePayload(text: string): boolean {
   const trimmed = text.trim();
-  return /^[\[{]/.test(trimmed) || /^<[?a-zA-Z]/.test(trimmed);
+  return /^[[{]/.test(trimmed) || /^<[?a-zA-Z]/.test(trimmed);
 }
 
 // Pasted request/response payloads dominate comment size; keep a preview only.

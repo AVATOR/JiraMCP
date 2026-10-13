@@ -94,7 +94,7 @@ async function readJson(file: string): Promise<Record<string, any>> {
       return {};
     }
 
-    throw new Error(`Cannot parse ${file}: ${(error as Error).message}`);
+    throw new Error(`Cannot parse ${file}: ${(error as Error).message}`, { cause: error });
   }
 }
 
@@ -188,7 +188,7 @@ async function pickCustomFields(baseUrl: string, email: string, apiToken: string
   }
 
   type Field = { id: string; name: string };
-  let fields: Field[] = [];
+  let fields: Field[];
 
   try {
     fields = await jiraGet<Field[]>(baseUrl, email, apiToken, "/rest/api/3/field");
@@ -199,9 +199,13 @@ async function pickCustomFields(baseUrl: string, email: string, apiToken: string
 
   const mappings: string[] = [];
 
-  for (const name of wanted.split(",").map((part) => part.trim()).filter(Boolean)) {
-    const match = fields.find((field) => field.name.toLowerCase() === name.toLowerCase())
-      ?? fields.find((field) => field.name.toLowerCase().includes(name.toLowerCase()));
+  for (const name of wanted
+    .split(",")
+    .map((part) => part.trim())
+    .filter(Boolean)) {
+    const match =
+      fields.find((field) => field.name.toLowerCase() === name.toLowerCase()) ??
+      fields.find((field) => field.name.toLowerCase().includes(name.toLowerCase()));
 
     if (!match) {
       log.warn(`No field matches "${name}" — skipped.`);
@@ -237,7 +241,7 @@ async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; sug
 
   log.note("Create a token at https://id.atlassian.com/manage-profile/security/api-tokens");
 
-  let apiToken = "";
+  let apiToken: string;
   let authenticated = false;
 
   for (;;) {

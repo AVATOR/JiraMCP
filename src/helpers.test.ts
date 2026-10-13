@@ -25,7 +25,8 @@ test("parseCustomFields handles aliases, blanks and duplicates", () => {
 });
 
 test("retryDelayMs honours Retry-After seconds and dates, else backs off", () => {
-  const withHeader = (value?: string) => new Response(null, { status: 429, headers: value ? { "retry-after": value } : {} });
+  const withHeader = (value?: string) =>
+    new Response(null, { status: 429, headers: value ? { "retry-after": value } : {} });
 
   assert.equal(retryDelayMs(withHeader("2"), 0), 2000);
   assert.equal(retryDelayMs(withHeader("600"), 0), 60_000);

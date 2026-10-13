@@ -94,7 +94,9 @@ export async function confirm(label: string, defaultValue = true): Promise<boole
 export async function select(label: string, choices: { value: string; hint?: string }[]): Promise<string> {
   write(`${styles.cyan("?")} ${label}\n`);
   choices.forEach((choice, index) => {
-    write(`  ${styles.bold(String(index + 1))}. ${choice.value}${choice.hint ? styles.dim(` — ${choice.hint}`) : ""}\n`);
+    write(
+      `  ${styles.bold(String(index + 1))}. ${choice.value}${choice.hint ? styles.dim(` — ${choice.hint}`) : ""}\n`
+    );
   });
 
   const answer = await ask("Choice", {

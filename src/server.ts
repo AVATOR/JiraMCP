@@ -34,7 +34,7 @@ const MAX_RETRIES = 3;
 const MAX_ERROR_BODY_CHARS = 1000;
 
 export function sanitizeFileName(name: string): string {
-  return name.replace(/[^\w.\-]+/g, "_").slice(0, 100) || "attachment";
+  return name.replace(/[^\w.-]+/g, "_").slice(0, 100) || "attachment";
 }
 
 export type JiraClientConfig = {
@@ -162,11 +162,7 @@ class JiraReadOnlyClient {
   }
 
   // /search/jql paginates with nextPageToken only; it ignores startAt and returns no total.
-  async searchIssues(params: {
-    jql: string;
-    maxResults?: number;
-    nextPageToken?: string;
-  }): Promise<JsonValue> {
+  async searchIssues(params: { jql: string; maxResults?: number; nextPageToken?: string }): Promise<JsonValue> {
     const query: Record<string, string> = {
       jql: params.jql,
       maxResults: String(params.maxResults ?? 20),
@@ -217,7 +213,7 @@ class JiraReadOnlyClient {
     // Walk newest-first until comments get older than `since`; Jira has no server-side date filter here.
     const matched: any[] = [];
     let startAt = 0;
-    let total = 0;
+    let total: number;
 
     while (true) {
       const page: any = await this.get(path, {
@@ -357,9 +353,7 @@ class JiraReadOnlyClient {
     }
 
     const contentType = response.headers.get("content-type") ?? "";
-    return contentType.includes("application/json")
-      ? ((await response.json()) as JsonValue)
-      : ((await response.text()) as JsonValue);
+    return contentType.includes("application/json") ? ((await response.json()) as JsonValue) : await response.text();
   }
 }
 
@@ -645,7 +639,10 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
 
       if (outputPath) {
         const resolved = path.resolve(outputPath.replace(/^~(?=$|[\\/])/, os.homedir()));
-        const isDir = await stat(resolved).then((entry) => entry.isDirectory(), () => false);
+        const isDir = await stat(resolved).then(
+          (entry) => entry.isDirectory(),
+          () => false
+        );
         target = isDir ? path.join(resolved, fileName) : resolved;
       }
 
@@ -666,7 +663,9 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
           type: "text",
           text:
             `Saved ${meta?.filename ?? attachmentId} (${resolvedMime}, ${data.byteLength} bytes) to ${target}` +
-            (isImage && tooLarge ? "\nImage not inlined: larger than the inline limit; read the saved file instead." : "")
+            (isImage && tooLarge
+              ? "\nImage not inlined: larger than the inline limit; read the saved file instead."
+              : "")
         }
       ];
 

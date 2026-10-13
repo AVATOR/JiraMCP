@@ -29,7 +29,7 @@ test("nested lists with paragraphs and a task list", () => {
 
 test("table, links and unmatched tags keep text", () => {
   const md = storageToMarkdown(
-    "<table><tbody><tr><th>A</th><th>B</th></tr><tr><td><p>1|2</p></td><td><a href=\"https://x\">link</a></td></tr></tbody></table>" +
+    '<table><tbody><tr><th>A</th><th>B</th></tr><tr><td><p>1|2</p></td><td><a href="https://x">link</a></td></tr></tbody></table>' +
       '<p><ac:link><ri:page ri:content-title="Home" /></ac:link> <span>open <b>tag</p>'
   );
   assert.equal(md, "| A | B |\n| --- | --- |\n| 1\\|2 | [link](https://x) |\n\n[page: Home] open **tag**");
