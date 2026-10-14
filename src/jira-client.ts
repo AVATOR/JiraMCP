@@ -27,8 +27,6 @@ import type {
 } from "./types.js";
 
 const COMMENT_PAGE_SIZE = 100;
-// Attachments are buffered in memory, so very large files are refused up front.
-export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 
 const BASE_ISSUE_FIELDS = [
   "summary",
@@ -291,28 +289,12 @@ export class JiraClient {
    * @returns File bytes and mime type.
    */
   async downloadAttachment(attachmentId: string): Promise<{ data: Buffer; mimeType: string }> {
-    // Jira redirects attachment content to a signed media URL; fetch follows it and
-    // drops the Authorization header cross-origin, which that URL does not need.
-    const url = new URL(`${this.http.baseUrl}/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`);
-    const response = await this.http.fetchWithRetry(url, "*/*");
-
-    if (!response.ok) {
-      throw new Error(
-        `Jira attachment download failed (${response.status} ${response.statusText}) for attachment ${attachmentId}`
-      );
-    }
-
-    const length = Number(response.headers.get("content-length"));
-    if (Number.isFinite(length) && length > MAX_DOWNLOAD_BYTES) {
-      await response.body?.cancel();
-      throw new Error(`Attachment ${attachmentId} is ${length} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);
-    }
-
-    return {
-      data: Buffer.from(await response.arrayBuffer()),
-      mimeType: (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim()
-    };
+    return this.http.download(
+      `/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`,
+      `Jira attachment ${attachmentId}`
+    );
   }
+
   /**
    * Walks a startAt-paginated listing, up to a cap of items.
    *

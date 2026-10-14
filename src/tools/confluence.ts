@@ -1,6 +1,10 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
+  formatConfluenceAttachments,
+  formatConfluenceChildren,
+  formatConfluenceComments,
+  formatConfluenceVersions,
   formatConfluencePage,
   formatConfluenceSearch,
   formatConfluenceSpacePages,
@@ -16,20 +20,132 @@ import { matchesQuery, rawFlag, READ_ONLY_ANNOTATIONS, toMarkdownResult, toTextR
  * @param client Confluence client the tools read through.
  */
 export function registerConfluenceTools(server: McpServer, client: ConfluenceClient) {
+  const pageIdParam = z
+    .string()
+    .min(1)
+    .describe("Page id, page URL (…/pages/123/Title), or exact title (then pass spaceKey).");
+  const spaceKeyParam = z.string().min(1).optional().describe("Space key, to look a page up by title.");
+  const cursorParam = z.string().optional().describe("Cursor from the previous result, to fetch the next page.");
+
   server.registerTool(
     "confluence_get_page",
     {
       title: "Get Confluence page",
-      description: "Fetch a Confluence page by ID as Markdown in read-only mode.",
+      description:
+        "Fetch a Confluence page as Markdown in read-only mode, with its labels and path. The page can be given " +
+        "by id, by URL or by exact title (with spaceKey).",
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
-        pageId: z.string().min(1).describe("The ID of the Confluence page"),
+        pageId: pageIdParam,
+        spaceKey: spaceKeyParam,
         raw: rawFlag
       }
     },
-    async ({ pageId, raw }) => {
-      const page = await client.getPage(pageId);
-      return raw ? toTextResult(page) : toMarkdownResult(formatConfluencePage(page, client.baseUrl));
+    async ({ pageId, spaceKey, raw }) => {
+      const id = await client.resolvePageId(pageId, spaceKey);
+      const page = await client.getPage(id);
+
+      if (raw) {
+        return toTextResult(page);
+      }
+
+      // The path is a nicety: a failure here must not hide the page itself.
+      const ancestors = await client.getAncestors(id).catch(() => []);
+      return toMarkdownResult(formatConfluencePage(page, client.baseUrl, ancestors));
+    }
+  );
+
+  server.registerTool(
+    "confluence_get_page_children",
+    {
+      title: "Get Confluence child pages",
+      description: "List the direct child pages of a page (to walk the page tree).",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        pageId: pageIdParam,
+        spaceKey: spaceKeyParam,
+        limit: z.number().int().min(1).max(250).optional().describe("Max pages to return (default 50)."),
+        cursor: cursorParam,
+        raw: rawFlag
+      }
+    },
+    async ({ pageId, spaceKey, limit, cursor, raw }) => {
+      const id = await client.resolvePageId(pageId, spaceKey);
+      const result = await client.getChildren(id, limit ?? 50, cursor);
+      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceChildren(result, id));
+    }
+  );
+
+  server.registerTool(
+    "confluence_get_page_comments",
+    {
+      title: "Get Confluence page comments",
+      description: "Comments of a page as Markdown: footer (default) or inline (anchored to text) comments.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        pageId: pageIdParam,
+        spaceKey: spaceKeyParam,
+        kind: z.enum(["footer", "inline"]).optional().describe("footer (default) or inline comments."),
+        limit: z.number().int().min(1).max(100).optional().describe("Max comments to return (default 25)."),
+        cursor: cursorParam,
+        raw: rawFlag
+      }
+    },
+    async ({ pageId, spaceKey, kind, limit, cursor, raw }) => {
+      const id = await client.resolvePageId(pageId, spaceKey);
+      const resolvedKind = kind ?? "footer";
+      const result = await client.getComments(id, resolvedKind, limit ?? 25, cursor);
+
+      if (raw) {
+        return toTextResult(result);
+      }
+
+      const next = result?._links?.next ? new URL(result._links.next, "http://x").searchParams.get("cursor") : null;
+      return toMarkdownResult(
+        formatConfluenceComments(result?.results ?? [], { pageId: id, kind: resolvedKind, cursor: next })
+      );
+    }
+  );
+
+  server.registerTool(
+    "confluence_list_attachments",
+    {
+      title: "List Confluence attachments",
+      description: "List the files attached to a page, with the ids needed by confluence_download_attachment.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        pageId: pageIdParam,
+        spaceKey: spaceKeyParam,
+        limit: z.number().int().min(1).max(250).optional().describe("Max attachments to return (default 50)."),
+        cursor: cursorParam,
+        raw: rawFlag
+      }
+    },
+    async ({ pageId, spaceKey, limit, cursor, raw }) => {
+      const id = await client.resolvePageId(pageId, spaceKey);
+      const result = await client.getAttachments(id, limit ?? 50, cursor);
+      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceAttachments(result, id));
+    }
+  );
+
+  server.registerTool(
+    "confluence_get_page_versions",
+    {
+      title: "Get Confluence page versions",
+      description: "Version history of a page: number, date, author id and change message, newest first.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        pageId: pageIdParam,
+        spaceKey: spaceKeyParam,
+        limit: z.number().int().min(1).max(100).optional().describe("Max versions to return (default 25)."),
+        cursor: cursorParam,
+        raw: rawFlag
+      }
+    },
+    async ({ pageId, spaceKey, limit, cursor, raw }) => {
+      const id = await client.resolvePageId(pageId, spaceKey);
+      const result = await client.getVersions(id, limit ?? 25, cursor);
+      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceVersions(result, id));
     }
   );
 

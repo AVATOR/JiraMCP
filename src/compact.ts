@@ -3,6 +3,10 @@
 import { adfToMarkdown, isAdf, type AdfOptions } from "./adf.js";
 import { storageToMarkdown } from "./storage.js";
 import type {
+  ConfluenceAttachment,
+  ConfluenceChildren,
+  ConfluenceComment,
+  ConfluenceVersion,
   ConfluencePage,
   JiraBoard,
   JiraChangelogEntry,
@@ -592,9 +596,14 @@ export function formatConfluenceSpacePages(result: ConfluenceSpacePages, spaceKe
  *
  * @param page v2 page with a storage-format body.
  * @param wikiBaseUrl Base URL used to build the page link.
+ * @param ancestors Ancestor pages, top-most first, shown as the page path.
  * @returns Title, metadata and body as Markdown.
  */
-export function formatConfluencePage(page: ConfluencePage, wikiBaseUrl: string): string {
+export function formatConfluencePage(
+  page: ConfluencePage,
+  wikiBaseUrl: string,
+  ancestors: { id?: string; title?: string }[] = []
+): string {
   const lines = [`# ${page?.title ?? ""}`, ""];
   const meta: [string, string | undefined][] = [
     ["Id", page?.id],
@@ -604,7 +613,9 @@ export function formatConfluencePage(page: ConfluencePage, wikiBaseUrl: string):
       "Version",
       page?.version?.number !== undefined ? `${page.version.number} (${shortDate(page.version.createdAt)})` : ""
     ],
-    ["Url", page?._links?.webui ? `${wikiBaseUrl}${page._links.webui}` : ""]
+    ["Url", page?._links?.webui ? `${wikiBaseUrl}${page._links.webui}` : ""],
+    ["Path", ancestors.map((ancestor) => `${ancestor.title} (${ancestor.id})`).join(" › ")],
+    ["Labels", (page?.labels?.results ?? []).map((label) => label.name).join(", ")]
   ];
 
   for (const [label, value] of meta) {
@@ -856,4 +867,129 @@ export function formatSprints(sprints: JiraSprint[], boardId: string): string {
       `| ${[sprint.id, sprint.name, sprint.state, shortDate(sprint.startDate), shortDate(sprint.endDate), clip(sprint.goal ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`
   );
   return [header, "", "| Id | Name | State | Start | End | Goal |", "|---|---|---|---|---|---|", ...rows].join("\n");
+}
+
+/**
+ * Renders the child pages of a page, with the cursor when more exist.
+ *
+ * @param result Response of the v2 children endpoint.
+ * @param pageId Parent page id shown in the header.
+ * @returns Markdown table.
+ */
+export function formatConfluenceChildren(result: ConfluenceChildren, pageId: string): string {
+  const pages = result?.results ?? [];
+  const lines = [`Page ${pageId} — ${pages.length} child pages`];
+
+  if (pages.length) {
+    lines.push(
+      "",
+      "| Id | Title |",
+      "|---|---|",
+      ...pages.map((page) => `| ${[page.id, page.title].map(cell).join(" | ")} |`)
+    );
+  }
+
+  const cursor = nextCursor(result?._links);
+  if (cursor) {
+    lines.push("", `cursor: ${cursor}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders page comments, converting the storage-format bodies to Markdown.
+ *
+ * @param comments Comments of one kind.
+ * @param view Page id, comment kind and the next cursor.
+ * @returns Markdown with one block per comment.
+ */
+export function formatConfluenceComments(
+  comments: ConfluenceComment[],
+  view: { pageId: string; kind: string; cursor: string | null }
+): string {
+  const header = `Page ${view.pageId} — ${comments.length} ${view.kind} comments`;
+  const blocks = comments.map((comment) => {
+    const status =
+      comment.resolutionStatus && comment.resolutionStatus !== "open" ? ` · ${comment.resolutionStatus}` : "";
+    const title = `### ${shortDate(comment.version?.createdAt)} — author ${comment.version?.authorId ?? "?"} · id ${comment.id}${status}`;
+    return `${title}\n${storageToMarkdown(comment.body?.storage?.value ?? "") || "_(empty)_"}`;
+  });
+  const lines = [header, ...blocks];
+
+  if (view.cursor) {
+    lines.push(`cursor: ${view.cursor}`);
+  }
+
+  return lines.join("\n\n");
+}
+
+/**
+ * Renders the attachments of a Confluence page.
+ *
+ * @param result Response of the v2 attachments endpoint.
+ * @param pageId Page id shown in the header.
+ * @returns Markdown table with the ids needed by confluence_download_attachment.
+ */
+export function formatConfluenceAttachments(
+  result: { results?: ConfluenceAttachment[]; _links?: { next?: string } },
+  pageId: string
+): string {
+  const attachments = result?.results ?? [];
+  const lines = [`Page ${pageId} — ${attachments.length} attachments`];
+
+  if (attachments.length) {
+    lines.push(
+      "",
+      "| Id | Filename | Type | Size | Created |",
+      "|---|---|---|---|---|",
+      ...attachments.map(
+        (attachment) =>
+          `| ${[attachment.id, attachment.title, attachment.mediaType, fileSize(attachment.fileSize), shortDate(attachment.createdAt ?? attachment.version?.createdAt)].map(cell).join(" | ")} |`
+      ),
+      "",
+      "Download one with confluence_download_attachment (attachmentId from the Id column)."
+    );
+  }
+
+  const cursor = nextCursor(result?._links);
+  if (cursor) {
+    lines.push("", `cursor: ${cursor}`);
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders the version history of a page.
+ *
+ * @param result Response of the v2 versions endpoint.
+ * @param pageId Page id shown in the header.
+ * @returns Markdown table, newest version first.
+ */
+export function formatConfluenceVersions(
+  result: { results?: ConfluenceVersion[]; _links?: { next?: string } },
+  pageId: string
+): string {
+  const versions = result?.results ?? [];
+  const lines = [`Page ${pageId} — ${versions.length} versions (newest first)`];
+
+  if (versions.length) {
+    lines.push(
+      "",
+      "| Version | Date | Author | Message |",
+      "|---|---|---|---|",
+      ...versions.map(
+        (version) =>
+          `| ${[version.number, shortDate(version.createdAt), version.authorId ?? "", `${version.minorEdit ? "(minor) " : ""}${version.message ?? ""}`].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  const cursor = nextCursor(result?._links);
+  if (cursor) {
+    lines.push("", `cursor: ${cursor}`);
+  }
+
+  return lines.join("\n");
 }

@@ -154,6 +154,7 @@ export type ConfluenceSpacePages = {
 
 export type ConfluencePage = ConfluencePageSummary & {
   spaceId?: string;
+  labels?: { results?: { name?: string }[] };
   body?: { storage?: { value?: string } };
   _links?: ConfluenceLinks;
 };
@@ -262,3 +263,50 @@ export type JiraPage = {
 };
 
 export type JiraSprintIssues = JiraSearchResult & { startAt?: number; maxResults?: number };
+
+export type ConfluenceAncestor = { id?: string; title?: string };
+
+export type ConfluenceChildren = {
+  results?: { id?: string; title?: string; status?: string; childPosition?: number }[];
+  _links?: ConfluenceLinks;
+};
+
+export type ConfluenceComment = {
+  id?: string;
+  version?: { number?: number; createdAt?: string; authorId?: string };
+  resolutionStatus?: string;
+  body?: { storage?: { value?: string } };
+};
+
+export type ConfluenceComments = {
+  results?: ConfluenceComment[];
+  _links?: ConfluenceLinks;
+};
+
+export type ConfluenceAttachment = {
+  id?: string;
+  title?: string;
+  mediaType?: string;
+  fileSize?: number;
+  createdAt?: string;
+  downloadLink?: string;
+  version?: { number?: number; createdAt?: string };
+};
+
+export type ConfluenceAttachments = {
+  results?: ConfluenceAttachment[];
+  _links?: ConfluenceLinks;
+};
+
+export type ConfluenceVersion = {
+  number?: number;
+  createdAt?: string;
+  authorId?: string;
+  message?: string;
+  minorEdit?: boolean;
+};
+
+export type ConfluenceVersions = {
+  results?: ConfluenceVersion[];
+  _links?: ConfluenceLinks;
+};
