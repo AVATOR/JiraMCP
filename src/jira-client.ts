@@ -5,14 +5,25 @@ import type {
   CustomFieldMapping,
   JiraAttachment,
   JiraAttachmentMeta,
+  JiraBoard,
+  JiraChangelogEntry,
   JiraComment,
   JiraCommentPage,
   JiraField,
+  JiraFilter,
   JiraIssue,
+  JiraPage,
   JiraProject,
+  JiraProjectDetail,
   JiraProjectSearchPage,
+  JiraReferenceItem,
+  JiraRemoteLink,
   JiraSearchResult,
-  JiraUser
+  JiraSprint,
+  JiraSprintIssues,
+  JiraTransition,
+  JiraUser,
+  JiraWorklog
 } from "./types.js";
 
 const COMMENT_PAGE_SIZE = 100;
@@ -301,5 +312,183 @@ export class JiraClient {
       data: Buffer.from(await response.arrayBuffer()),
       mimeType: (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim()
     };
+  }
+  /**
+   * Walks a startAt-paginated listing, up to a cap of items.
+   *
+   * @param path API path.
+   * @param itemsKey Property of the page that holds the items.
+   * @param query Extra query parameters.
+   * @param maxItems Stop once this many items are collected.
+   * @returns The collected items.
+   */
+  private async listAll<T>(
+    path: string,
+    itemsKey: "values" | "worklogs",
+    query: Record<string, string> = {},
+    maxItems = MAX_LIST_PAGES * 100
+  ): Promise<T[]> {
+    const items: T[] = [];
+
+    while (items.length < maxItems) {
+      const page = await this.http.get<JiraPage>(path, {
+        ...query,
+        startAt: String(items.length),
+        maxResults: "100"
+      });
+      const batch = (page?.[itemsKey] ?? []) as T[];
+      items.push(...batch);
+
+      if (!batch.length || page?.isLast === true || (page?.total !== undefined && items.length >= page.total)) {
+        break;
+      }
+    }
+
+    return items.slice(0, maxItems);
+  }
+
+  /**
+   * Fetches the whole change history of an issue, oldest first.
+   *
+   * @param issueKey Issue key.
+   * @returns Changelog entries.
+   */
+  async getChangelog(issueKey: string): Promise<JiraChangelogEntry[]> {
+    return this.listAll<JiraChangelogEntry>(`${issuePath(issueKey)}/changelog`, "values");
+  }
+
+  /**
+   * Fetches the time logged on an issue.
+   *
+   * @param issueKey Issue key.
+   * @returns Worklogs in the order Jira returns them.
+   */
+  async getWorklogs(issueKey: string): Promise<JiraWorklog[]> {
+    return this.listAll<JiraWorklog>(`${issuePath(issueKey)}/worklog`, "worklogs");
+  }
+
+  /**
+   * Lists the transitions currently available for an issue (read only; nothing is executed).
+   *
+   * @param issueKey Issue key.
+   * @returns Available transitions.
+   */
+  async getTransitions(issueKey: string): Promise<JiraTransition[]> {
+    const result = await this.http.get<{ transitions?: JiraTransition[] }>(`${issuePath(issueKey)}/transitions`);
+    return result?.transitions ?? [];
+  }
+
+  /**
+   * Lists statuses, issue types or priorities; cached.
+   *
+   * @param kind Which reference list.
+   * @returns The items of that list.
+   */
+  async getReference(kind: "statuses" | "issueTypes" | "priorities"): Promise<JiraReferenceItem[]> {
+    const paths = {
+      statuses: "/rest/api/3/status",
+      issueTypes: "/rest/api/3/issuetype",
+      priorities: "/rest/api/3/priority"
+    };
+    return this.cache.get(`reference-${kind}`, async () => {
+      const items = await this.http.get<unknown>(paths[kind]);
+      return Array.isArray(items) ? (items as JiraReferenceItem[]) : [];
+    });
+  }
+
+  /**
+   * Fetches project details including issue types, components and versions.
+   *
+   * @param projectKey Project key.
+   * @returns The project.
+   */
+  async getProject(projectKey: string): Promise<JiraProjectDetail> {
+    return this.http.get<JiraProjectDetail>(`/rest/api/3/project/${encodeURIComponent(projectKey)}`);
+  }
+
+  /**
+   * Searches saved filters visible to the user.
+   *
+   * @param params Optional name filter and page size.
+   * @returns Matching filters.
+   */
+  async findFilters(params: { name?: string; limit: number }): Promise<JiraFilter[]> {
+    const query: Record<string, string> = { maxResults: String(params.limit), expand: "jql" };
+    if (params.name) {
+      query.filterName = params.name;
+    }
+
+    const result = await this.http.get<JiraPage>("/rest/api/3/filter/search", query);
+    return (result?.values ?? []) as JiraFilter[];
+  }
+
+  /**
+   * Fetches one saved filter with its JQL.
+   *
+   * @param filterId Filter id.
+   * @returns The filter.
+   */
+  async getFilter(filterId: string): Promise<JiraFilter> {
+    return this.http.get<JiraFilter>(`/rest/api/3/filter/${encodeURIComponent(filterId)}`);
+  }
+
+  /**
+   * Lists web/Confluence links attached to an issue (pull requests, docs, ...).
+   *
+   * @param issueKey Issue key.
+   * @returns Remote links.
+   */
+  async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
+    const links = await this.http.get<unknown>(`${issuePath(issueKey)}/remotelink`);
+    return Array.isArray(links) ? (links as JiraRemoteLink[]) : [];
+  }
+
+  /**
+   * Lists Agile boards the user can see.
+   *
+   * @param params Optional name and project filters, and page size.
+   * @returns Matching boards.
+   */
+  async getBoards(params: { name?: string; projectKey?: string; limit: number }): Promise<JiraBoard[]> {
+    const query: Record<string, string> = { maxResults: String(params.limit) };
+    if (params.name) {
+      query.name = params.name;
+    }
+    if (params.projectKey) {
+      query.projectKeyOrId = params.projectKey;
+    }
+
+    const result = await this.http.get<JiraPage>("/rest/agile/1.0/board", query);
+    return (result?.values ?? []) as JiraBoard[];
+  }
+
+  /**
+   * Lists the sprints of a Scrum board.
+   *
+   * @param boardId Board id.
+   * @param state Optional sprint state filter.
+   * @returns Sprints, oldest first.
+   */
+  async getSprints(boardId: string, state?: string): Promise<JiraSprint[]> {
+    return this.listAll<JiraSprint>(
+      `/rest/agile/1.0/board/${encodeURIComponent(boardId)}/sprint`,
+      "values",
+      state ? { state } : {}
+    );
+  }
+
+  /**
+   * Fetches the issues of a sprint, one page at a time.
+   *
+   * @param sprintId Sprint id.
+   * @param params Page size and offset.
+   * @returns Agile search response with total and startAt.
+   */
+  async getSprintIssues(sprintId: string, params: { limit: number; startAt: number }): Promise<JiraSprintIssues> {
+    return this.http.get<JiraSprintIssues>(`/rest/agile/1.0/sprint/${encodeURIComponent(sprintId)}/issue`, {
+      maxResults: String(params.limit),
+      startAt: String(params.startAt),
+      fields: SEARCH_FIELDS
+    });
   }
 }

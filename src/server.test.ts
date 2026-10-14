@@ -74,13 +74,24 @@ test("lists every tool with an input schema", async () => {
     "confluence_search_pages",
     "jira_download_attachment",
     "jira_find_users",
+    "jira_get_changelog",
     "jira_get_comments",
     "jira_get_current_user",
     "jira_get_issue",
+    "jira_get_project",
     "jira_get_project_issues",
+    "jira_get_remote_links",
+    "jira_get_sprint_issues",
+    "jira_get_worklogs",
     "jira_list_attachments",
+    "jira_list_boards",
     "jira_list_fields",
+    "jira_list_filters",
+    "jira_list_metadata",
     "jira_list_projects",
+    "jira_list_sprints",
+    "jira_list_transitions",
+    "jira_run_filter",
     "jira_search_issues"
   ]);
 
@@ -640,3 +651,210 @@ for (const status of [502, 504]) {
     assert.equal(calls.length, 2);
   });
 }
+
+test("jira_get_changelog lists changes newest first and filters by field", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/issue/ABC-1/changelog": () =>
+      json({
+        isLast: true,
+        total: 2,
+        values: [
+          {
+            id: "1",
+            created: "2026-09-01T10:00:00.000+0000",
+            author: { displayName: "Ann" },
+            items: [{ field: "status", fromString: "To Do", toString: "In Progress" }]
+          },
+          {
+            id: "2",
+            created: "2026-09-02T10:00:00.000+0000",
+            author: { displayName: "Bob" },
+            items: [
+              { field: "assignee", fromString: null, toString: "Bob" },
+              { field: "status", fromString: "In Progress", toString: "Done" }
+            ]
+          }
+        ]
+      })
+  });
+
+  const all = await call(client, "jira_get_changelog", { issueKey: "ABC-1" });
+  assert.match(all.text, /showing 2 of 2 changes \(newest first\)/);
+  assert.ok(all.text.indexOf("Bob") < all.text.indexOf("Ann"), "newest change comes first");
+  assert.match(all.text, /- assignee: ∅ → Bob/);
+
+  const status = await call(client, "jira_get_changelog", { issueKey: "ABC-1", field: "Status", limit: 1 });
+  assert.match(status.text, /showing 1 of 2 changes \(newest first, field "Status"\)/);
+  assert.match(status.text, /In Progress → Done/);
+  assert.doesNotMatch(status.text, /assignee/);
+  assert.equal(calls[0].url.searchParams.get("startAt"), "0");
+});
+
+test("jira_get_worklogs sums the logged time", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1/worklog": () =>
+      json({
+        total: 2,
+        worklogs: [
+          {
+            started: "2026-09-01T09:00:00.000+0000",
+            author: { displayName: "Ann" },
+            timeSpent: "1h",
+            timeSpentSeconds: 3600
+          },
+          {
+            started: "2026-09-02T09:00:00.000+0000",
+            author: { displayName: "Bob" },
+            timeSpent: "30m",
+            timeSpentSeconds: 1800,
+            comment: {
+              type: "doc",
+              version: 1,
+              content: [{ type: "paragraph", content: [{ type: "text", text: "review" }] }]
+            }
+          }
+        ]
+      })
+  });
+
+  const { text } = await call(client, "jira_get_worklogs", { issueKey: "ABC-1" });
+
+  assert.match(text, /2 worklogs, 1.5 h in total/);
+  assert.match(text, /\| 2026-09-02 09:00 \| Bob \| 30m \| review \|/);
+});
+
+test("jira_list_transitions shows target statuses", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1/transitions": () =>
+      json({ transitions: [{ id: "31", name: "Start", to: { name: "In Progress" } }] })
+  });
+
+  const { text } = await call(client, "jira_list_transitions", { issueKey: "ABC-1" });
+
+  assert.match(text, /1 available transitions/);
+  assert.match(text, /\| 31 \| Start \| In Progress \|/);
+});
+
+test("jira_list_metadata lists and filters statuses, issue types and priorities", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/status": () =>
+      json([
+        { id: "1", name: "To Do", statusCategory: { name: "To Do" } },
+        { id: "2", name: "Done", statusCategory: { name: "Done" } }
+      ]),
+    "/rest/api/3/issuetype": () => json([{ id: "10", name: "Sub-task", subtask: true, description: "Part of a task" }]),
+    "/rest/api/3/priority": () => json([{ id: "3", name: "High" }])
+  });
+
+  const statuses = await call(client, "jira_list_metadata", { kind: "statuses", query: "do" });
+  assert.match(statuses.text, /2 statuses/);
+  const filtered = await call(client, "jira_list_metadata", { kind: "statuses", query: "done" });
+  assert.match(filtered.text, /1 statuses/);
+  assert.doesNotMatch(filtered.text, /To Do/);
+  assert.equal(calls.filter((entry) => entry.url.pathname === "/rest/api/3/status").length, 1, "cached");
+
+  const types = await call(client, "jira_list_metadata", { kind: "issueTypes" });
+  assert.match(types.text, /\| 10 \| Sub-task \| subtask \| Part of a task \|/);
+  const priorities = await call(client, "jira_list_metadata", { kind: "priorities" });
+  assert.match(priorities.text, /\| 3 \| High \|/);
+});
+
+test("jira_get_project shows issue types, components and versions", async () => {
+  const { client } = await connect({
+    "/rest/api/3/project/ABC": () =>
+      json({
+        key: "ABC",
+        name: "Alpha",
+        lead: { displayName: "Ann" },
+        issueTypes: [{ name: "Bug" }, { name: "Story" }],
+        components: [{ name: "API", lead: { displayName: "Bob" } }],
+        versions: [
+          { name: "1.0", released: true, releaseDate: "2026-06-01" },
+          { name: "2.0", released: false }
+        ]
+      })
+  });
+
+  const { text } = await call(client, "jira_get_project", { projectKey: "ABC" });
+
+  assert.match(text, /# ABC: Alpha/);
+  assert.match(text, /Bug, Story/);
+  assert.match(text, /- API \(lead: Bob\)/);
+  assert.match(text, /- 1.0 \[released, 2026-06-01\]/);
+  assert.match(text, /- 2.0 \[unreleased\]/);
+});
+
+test("jira_get_project falls back to the default project and fails without one", async () => {
+  const withDefault = await connect(
+    { "/rest/api/3/project/DEF": () => json({ key: "DEF", name: "Default" }) },
+    { defaultProject: "DEF" }
+  );
+  assert.match((await call(withDefault.client, "jira_get_project", {})).text, /# DEF: Default/);
+
+  await withDefault.client.close();
+  const without = await connect({});
+  const { result } = await call(without.client, "jira_get_project", {});
+  assert.equal(result.isError, true);
+});
+
+test("jira_list_filters searches by name and jira_run_filter runs the filter's JQL", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/filter/search": () =>
+      json({ values: [{ id: "7", name: "My bugs", jql: "type = Bug", owner: { displayName: "Ann" } }] }),
+    "/rest/api/3/filter/7": () => json({ id: "7", name: "My bugs", jql: "type = Bug" }),
+    "/rest/api/3/search/jql": () => json({ issues: [{ key: "ABC-1", fields: { summary: "Crash" } }] })
+  });
+
+  const list = await call(client, "jira_list_filters", { query: "bugs" });
+  assert.match(list.text, /\| 7 \| My bugs \| Ann \| type = Bug \|/);
+  assert.equal(calls[0].url.searchParams.get("filterName"), "bugs");
+
+  const run = await call(client, "jira_run_filter", { filterId: "7" });
+  assert.match(run.text, /Filter My bugs: type = Bug/);
+  assert.match(run.text, /\| ABC-1 \| Crash \|/);
+  assert.equal(calls.at(-1)?.url.searchParams.get("jql"), "type = Bug");
+});
+
+test("jira_get_remote_links lists link titles and targets", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1/remotelink": () =>
+      json([
+        {
+          relationship: "mentioned in",
+          application: { name: "GitHub" },
+          object: { url: "https://github.com/o/r/pull/1", title: "PR 1" }
+        }
+      ])
+  });
+
+  const { text } = await call(client, "jira_get_remote_links", { issueKey: "ABC-1" });
+
+  assert.match(text, /1 remote links/);
+  assert.match(text, /- mentioned in: \[PR 1\]\(https:\/\/github.com\/o\/r\/pull\/1\) \(GitHub\)/);
+});
+
+test("Agile tools list boards, sprints and sprint issues with paging", async () => {
+  const { client, calls } = await connect({
+    "/rest/agile/1.0/board": () =>
+      json({ values: [{ id: 3, name: "Alpha board", type: "scrum", location: { projectKey: "ABC" } }] }),
+    "/rest/agile/1.0/board/3/sprint": () =>
+      json({
+        isLast: true,
+        values: [{ id: 9, name: "Sprint 9", state: "active", startDate: "2026-09-01T00:00:00.000Z", goal: "Ship" }]
+      }),
+    "/rest/agile/1.0/sprint/9/issue": () =>
+      json({ startAt: 0, maxResults: 1, total: 3, issues: [{ key: "ABC-1", fields: { summary: "One" } }] })
+  });
+
+  const boards = await call(client, "jira_list_boards", { projectKey: "ABC" });
+  assert.match(boards.text, /\| 3 \| Alpha board \| scrum \| ABC \|/);
+  assert.equal(calls[0].url.searchParams.get("projectKeyOrId"), "ABC");
+
+  const sprints = await call(client, "jira_list_sprints", { boardId: "3", state: "active" });
+  assert.match(sprints.text, /\| 9 \| Sprint 9 \| active \| 2026-09-01 00:00 \| — \| Ship \|/);
+  assert.equal(calls[1].url.searchParams.get("state"), "active");
+
+  const issues = await call(client, "jira_get_sprint_issues", { sprintId: "9", limit: 1 });
+  assert.match(issues.text, /\| ABC-1 \| One \|/);
+  assert.match(issues.text, /nextStartAt: 1/);
+});

@@ -4,6 +4,15 @@ import { adfToMarkdown, isAdf, type AdfOptions } from "./adf.js";
 import { storageToMarkdown } from "./storage.js";
 import type {
   ConfluencePage,
+  JiraBoard,
+  JiraChangelogEntry,
+  JiraFilter,
+  JiraProjectDetail,
+  JiraReferenceItem,
+  JiraRemoteLink,
+  JiraSprint,
+  JiraTransition,
+  JiraWorklog,
   ConfluenceSearchResult,
   ConfluenceSpace,
   ConfluenceSpacePages,
@@ -606,4 +615,245 @@ export function formatConfluencePage(page: ConfluencePage, wikiBaseUrl: string):
 
   lines.push("", storageToMarkdown(page?.body?.storage?.value ?? "") || "_(empty)_");
   return lines.join("\n");
+}
+
+/**
+ * Renders issue history: one block per change set with the fields that changed.
+ *
+ * @param entries Changelog entries, newest first.
+ * @param view Issue key, total entries and the field filter that was applied.
+ * @returns Markdown history.
+ */
+export function formatChangelog(
+  entries: JiraChangelogEntry[],
+  view: { issueKey: string; total: number; field?: string }
+): string {
+  const filter = view.field ? `, field "${view.field}"` : "";
+  const header = `${view.issueKey} — showing ${entries.length} of ${view.total} changes (newest first${filter})`;
+
+  if (!entries.length) {
+    return header;
+  }
+
+  const blocks = entries.map((entry) => {
+    const lines = (entry.items ?? []).map(
+      (item) => `- ${item.field ?? "?"}: ${clip(item.fromString ?? "∅", 120)} → ${clip(item.toString ?? "∅", 120)}`
+    );
+    return [`### ${shortDate(entry.created)} — ${userName(entry.author)}`, ...lines].join("\n");
+  });
+
+  return [header, ...blocks].join("\n\n");
+}
+
+/**
+ * Renders worklogs as a table with the total time logged.
+ *
+ * @param worklogs Worklogs of an issue.
+ * @param issueKey Issue key shown in the header.
+ * @returns Markdown table.
+ */
+export function formatWorklogs(worklogs: JiraWorklog[], issueKey: string): string {
+  const seconds = worklogs.reduce((sum, worklog) => sum + (worklog.timeSpentSeconds ?? 0), 0);
+  const hours = Math.round((seconds / 3600) * 10) / 10;
+  const header = `${issueKey} — ${worklogs.length} worklogs, ${hours} h in total`;
+
+  if (!worklogs.length) {
+    return header;
+  }
+
+  const rows = worklogs.map((worklog) => {
+    const comment = clip(adfToMarkdown(worklog.comment), EXTRA_CELL_CHARS);
+    return `| ${[shortDate(worklog.started), userName(worklog.author), worklog.timeSpent ?? "", comment].map(cell).join(" | ")} |`;
+  });
+
+  return [header, "", "| Started | Author | Time | Comment |", "|---|---|---|---|", ...rows].join("\n");
+}
+
+/**
+ * Renders the transitions available for an issue.
+ *
+ * @param transitions Available transitions.
+ * @param issueKey Issue key shown in the header.
+ * @returns Markdown table.
+ */
+export function formatTransitions(transitions: JiraTransition[], issueKey: string): string {
+  const header = `${issueKey} — ${transitions.length} available transitions`;
+
+  if (!transitions.length) {
+    return header;
+  }
+
+  const rows = transitions.map(
+    (transition) => `| ${[transition.id, transition.name, transition.to?.name].map(cell).join(" | ")} |`
+  );
+  return [header, "", "| Id | Name | Target status |", "|---|---|---|", ...rows].join("\n");
+}
+
+/**
+ * Renders statuses, issue types or priorities.
+ *
+ * @param items Reference items.
+ * @param label Plural name used in the header (e.g. "statuses").
+ * @param total Number of items before the limit was applied.
+ * @returns Markdown table.
+ */
+export function formatReference(items: JiraReferenceItem[], label: string, total: number): string {
+  const lines = [countLine(label, items.length, total)];
+
+  if (items.length) {
+    lines.push(
+      "",
+      "| Id | Name | Info | Description |",
+      "|---|---|---|---|",
+      ...items.map((item) => {
+        const info = item.statusCategory?.name ?? (item.subtask ? "subtask" : "");
+        return `| ${[item.id, item.name, info, clip(item.description ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`;
+      })
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders a project with its issue types, components and versions.
+ *
+ * @param project Response of /rest/api/3/project/{key}.
+ * @returns Markdown summary.
+ */
+export function formatProjectDetail(project: JiraProjectDetail): string {
+  const lines = [`# ${project.key}: ${project.name ?? ""}`, ""];
+  const meta: [string, string | undefined][] = [
+    ["Type", project.projectTypeKey],
+    ["Lead", project.lead ? userName(project.lead) : ""],
+    ["Description", project.description]
+  ];
+
+  for (const [label, value] of meta) {
+    if (value) {
+      lines.push(`- **${label}:** ${value}`);
+    }
+  }
+
+  const issueTypes = (project.issueTypes ?? []).map((type) => type.name).filter(Boolean);
+  if (issueTypes.length) {
+    lines.push("", "## Issue types", issueTypes.join(", "));
+  }
+
+  const components = project.components ?? [];
+  if (components.length) {
+    lines.push(
+      "",
+      `## Components (${components.length})`,
+      ...components.map(
+        (component) => `- ${component.name}${component.lead ? ` (lead: ${userName(component.lead)})` : ""}`
+      )
+    );
+  }
+
+  const versions = project.versions ?? [];
+  if (versions.length) {
+    lines.push(
+      "",
+      `## Versions (${versions.length})`,
+      ...versions.map((version) => {
+        const state = version.archived ? "archived" : version.released ? "released" : "unreleased";
+        return `- ${version.name} [${state}${version.releaseDate ? `, ${version.releaseDate}` : ""}]`;
+      })
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders saved filters with their JQL.
+ *
+ * @param filters Filters from /rest/api/3/filter/search.
+ * @returns Markdown table.
+ */
+export function formatFilters(filters: JiraFilter[]): string {
+  const lines = [`${filters.length} filters`];
+
+  if (filters.length) {
+    lines.push(
+      "",
+      "| Id | Name | Owner | JQL |",
+      "|---|---|---|---|",
+      ...filters.map(
+        (filter) =>
+          `| ${[filter.id, filter.name, filter.owner?.displayName ?? "", clip(filter.jql ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders the remote links (pull requests, Confluence pages, ...) of an issue.
+ *
+ * @param links Remote links of the issue.
+ * @param issueKey Issue key shown in the header.
+ * @returns Markdown list.
+ */
+export function formatRemoteLinks(links: JiraRemoteLink[], issueKey: string): string {
+  const header = `${issueKey} — ${links.length} remote links`;
+
+  if (!links.length) {
+    return header;
+  }
+
+  const rows = links.map((link) => {
+    const source = link.application?.name ? ` (${link.application.name})` : "";
+    const relationship = link.relationship ? `${link.relationship}: ` : "";
+    return `- ${relationship}[${link.object?.title ?? link.object?.url ?? ""}](${link.object?.url ?? ""})${source}`;
+  });
+
+  return [header, "", ...rows].join("\n");
+}
+
+/**
+ * Renders Agile boards.
+ *
+ * @param boards Boards from /rest/agile/1.0/board.
+ * @returns Markdown table.
+ */
+export function formatBoards(boards: JiraBoard[]): string {
+  const lines = [`${boards.length} boards`];
+
+  if (boards.length) {
+    lines.push(
+      "",
+      "| Id | Name | Type | Project |",
+      "|---|---|---|---|",
+      ...boards.map(
+        (board) =>
+          `| ${[board.id, board.name, board.type, board.location?.projectKey ?? board.location?.displayName ?? ""].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
+}
+
+/**
+ * Renders the sprints of a board.
+ *
+ * @param sprints Sprints of a board.
+ * @param boardId Board id shown in the header.
+ * @returns Markdown table.
+ */
+export function formatSprints(sprints: JiraSprint[], boardId: string): string {
+  const header = `Board ${boardId} — ${sprints.length} sprints`;
+
+  if (!sprints.length) {
+    return header;
+  }
+
+  const rows = sprints.map(
+    (sprint) =>
+      `| ${[sprint.id, sprint.name, sprint.state, shortDate(sprint.startDate), shortDate(sprint.endDate), clip(sprint.goal ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`
+  );
+  return [header, "", "| Id | Name | State | Start | End | Goal |", "|---|---|---|---|---|---|", ...rows].join("\n");
 }

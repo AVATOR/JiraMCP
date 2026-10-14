@@ -2,6 +2,15 @@ import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { z } from "zod";
 import {
   formatAttachments,
+  formatBoards,
+  formatChangelog,
+  formatFilters,
+  formatProjectDetail,
+  formatReference,
+  formatRemoteLinks,
+  formatSprints,
+  formatTransitions,
+  formatWorklogs,
   formatComment,
   formatComments,
   formatCurrentUser,
@@ -253,6 +262,236 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     async ({ query, limit, raw }) => {
       const users = await client.findUsers(query, limit ?? 10);
       return raw ? toTextResult(users) : toMarkdownResult(formatUsers(users), { untrusted: false });
+    }
+  );
+  server.registerTool(
+    "jira_get_changelog",
+    {
+      title: "Get Jira issue history",
+      description:
+        "Who changed what and when on an issue (status, assignee, fields), newest first. Filter to one " +
+        "field such as status with field.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        issueKey: z.string().min(2),
+        field: z.string().optional().describe("Only changes of this field name, e.g. status or assignee."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max changes to return (default 20)."),
+        raw: rawFlag
+      }
+    },
+    async ({ issueKey, field, limit, raw }) => {
+      const needle = field?.trim().toLowerCase();
+      const matching = (await client.getChangelog(issueKey))
+        .map((entry) => ({
+          ...entry,
+          items: (entry.items ?? []).filter((item) => !needle || item.field?.toLowerCase() === needle)
+        }))
+        .filter((entry) => entry.items.length)
+        .reverse();
+      const shown = matching.slice(0, limit ?? 20);
+      return raw
+        ? toTextResult(shown)
+        : toMarkdownResult(formatChangelog(shown, { issueKey, total: matching.length, field }));
+    }
+  );
+
+  server.registerTool(
+    "jira_get_worklogs",
+    {
+      title: "Get Jira worklogs",
+      description: "Time logged on an issue: who, when, how long, with the total.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: { issueKey: z.string().min(2), raw: rawFlag }
+    },
+    async ({ issueKey, raw }) => {
+      const worklogs = await client.getWorklogs(issueKey);
+      return raw ? toTextResult(worklogs) : toMarkdownResult(formatWorklogs(worklogs, issueKey));
+    }
+  );
+
+  server.registerTool(
+    "jira_list_transitions",
+    {
+      title: "List Jira transitions",
+      description:
+        "Workflow transitions currently available for an issue (id, name, target status). Read only: " +
+        "transitions cannot be executed with this server.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: { issueKey: z.string().min(2), raw: rawFlag }
+    },
+    async ({ issueKey, raw }) => {
+      const transitions = await client.getTransitions(issueKey);
+      return raw
+        ? toTextResult(transitions)
+        : toMarkdownResult(formatTransitions(transitions, issueKey), { untrusted: false });
+    }
+  );
+
+  server.registerTool(
+    "jira_list_metadata",
+    {
+      title: "List Jira statuses, issue types or priorities",
+      description:
+        "Reference lists for writing JQL: all statuses (with category), issue types or priorities. " +
+        "Filter by name with query.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        kind: z.enum(["statuses", "issueTypes", "priorities"]).describe("Which list to return."),
+        query: z.string().optional().describe("Case-insensitive text the name must contain."),
+        limit: z.number().int().min(1).max(500).optional().describe("Max items to return (default 100)."),
+        raw: rawFlag
+      }
+    },
+    async ({ kind, query, limit, raw }) => {
+      const matches = (await client.getReference(kind)).filter((item) => matchesQuery(query, item.name));
+      const shown = matches.slice(0, limit ?? 100);
+      return raw
+        ? toTextResult(shown)
+        : toMarkdownResult(formatReference(shown, kind, matches.length), { untrusted: false });
+    }
+  );
+
+  server.registerTool(
+    "jira_get_project",
+    {
+      title: "Get Jira project",
+      description: "Project details: lead, issue types, components and versions/releases.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: { projectKey: z.string().min(1).optional(), raw: rawFlag }
+    },
+    async ({ projectKey, raw }) => {
+      const resolved = projectKey ?? client.defaultProject;
+
+      if (!resolved) {
+        throw new Error("projectKey is required when JIRA_DEFAULT_PROJECT is not set");
+      }
+
+      const project = await client.getProject(resolved);
+      return raw ? toTextResult(project) : toMarkdownResult(formatProjectDetail(project));
+    }
+  );
+
+  server.registerTool(
+    "jira_list_filters",
+    {
+      title: "List Jira filters",
+      description: "Search saved filters by name; returns ids (for jira_run_filter) and their JQL.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        query: z.string().optional().describe("Part of the filter name."),
+        limit: z.number().int().min(1).max(100).optional().describe("Max filters to return (default 25)."),
+        raw: rawFlag
+      }
+    },
+    async ({ query, limit, raw }) => {
+      const filters = await client.findFilters({ name: query, limit: limit ?? 25 });
+      return raw ? toTextResult(filters) : toMarkdownResult(formatFilters(filters));
+    }
+  );
+
+  server.registerTool(
+    "jira_run_filter",
+    {
+      title: "Run Jira filter",
+      description: "Run a saved filter by id and list the matching issues (like jira_search_issues).",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        filterId: z.string().min(1),
+        maxResults: z.number().int().min(1).max(100).optional(),
+        nextPageToken: nextPageTokenParam,
+        raw: rawFlag
+      }
+    },
+    async ({ filterId, maxResults, nextPageToken, raw }) => {
+      const filter = await client.getFilter(filterId);
+
+      if (!filter.jql) {
+        throw new Error(`Filter ${filterId} has no JQL`);
+      }
+
+      const result = await client.searchIssues({ jql: filter.jql, maxResults, nextPageToken });
+      return raw
+        ? toTextResult({ filter, result }, client.customFields)
+        : toMarkdownResult(`Filter ${filter.name ?? filterId}: ${filter.jql}\n\n${formatSearch(result)}`);
+    }
+  );
+
+  server.registerTool(
+    "jira_get_remote_links",
+    {
+      title: "Get Jira remote links",
+      description: "Links from an issue to the outside: pull requests, Confluence pages, documents.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: { issueKey: z.string().min(2), raw: rawFlag }
+    },
+    async ({ issueKey, raw }) => {
+      const links = await client.getRemoteLinks(issueKey);
+      return raw ? toTextResult(links) : toMarkdownResult(formatRemoteLinks(links, issueKey));
+    }
+  );
+
+  server.registerTool(
+    "jira_list_boards",
+    {
+      title: "List Jira boards",
+      description: "Agile boards (Scrum/Kanban) with ids for jira_list_sprints. Filter by name or project key.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        query: z.string().optional().describe("Part of the board name."),
+        projectKey: z.string().optional().describe("Only boards of this project."),
+        limit: z.number().int().min(1).max(100).optional().describe("Max boards to return (default 25)."),
+        raw: rawFlag
+      }
+    },
+    async ({ query, projectKey, limit, raw }) => {
+      const boards = await client.getBoards({ name: query, projectKey, limit: limit ?? 25 });
+      return raw ? toTextResult(boards) : toMarkdownResult(formatBoards(boards));
+    }
+  );
+
+  server.registerTool(
+    "jira_list_sprints",
+    {
+      title: "List Jira sprints",
+      description:
+        "Sprints of a Scrum board with ids for jira_get_sprint_issues. Use state=active for the current one.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        boardId: z.string().min(1).describe("Board id from jira_list_boards."),
+        state: z.enum(["active", "future", "closed"]).optional().describe("Only sprints in this state."),
+        raw: rawFlag
+      }
+    },
+    async ({ boardId, state, raw }) => {
+      const sprints = await client.getSprints(boardId, state);
+      return raw ? toTextResult(sprints) : toMarkdownResult(formatSprints(sprints, boardId));
+    }
+  );
+
+  server.registerTool(
+    "jira_get_sprint_issues",
+    {
+      title: "Get Jira sprint issues",
+      description: "Issues of a sprint (id from jira_list_sprints), page by page via startAt.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        sprintId: z.string().min(1),
+        limit: z.number().int().min(1).max(100).optional().describe("Page size (default 50)."),
+        startAt: z.number().int().min(0).optional().describe("Offset from the previous result's nextStartAt."),
+        raw: rawFlag
+      }
+    },
+    async ({ sprintId, limit, startAt, raw }) => {
+      const result = await client.getSprintIssues(sprintId, { limit: limit ?? 50, startAt: startAt ?? 0 });
+
+      if (raw) {
+        return toTextResult(result, client.customFields);
+      }
+
+      const shown = (result.issues ?? []).length;
+      const next = (result.startAt ?? 0) + shown;
+      const more = result.total !== undefined && next < result.total ? `\n\nnextStartAt: ${next}` : "";
+      return toMarkdownResult(`${formatSearch(result)}${more}`);
     }
   );
 }

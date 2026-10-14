@@ -172,3 +172,93 @@ export type ConfluenceSearchResult = {
   totalSize?: number;
   _links?: ConfluenceLinks;
 };
+
+export type JiraChangelogItem = {
+  field?: string;
+  fromString?: string | null;
+  toString?: string | null;
+};
+
+export type JiraChangelogEntry = {
+  id?: string;
+  author?: JiraUser;
+  created?: string;
+  items?: JiraChangelogItem[];
+};
+
+export type JiraWorklog = {
+  id?: string;
+  author?: JiraUser;
+  started?: string;
+  timeSpent?: string;
+  timeSpentSeconds?: number;
+  // ADF document, rendered by adfToMarkdown.
+  comment?: unknown;
+};
+
+export type JiraTransition = {
+  id?: string;
+  name?: string;
+  to?: JiraNamed;
+};
+
+// Statuses, issue types and priorities share one shape for listing purposes.
+export type JiraReferenceItem = {
+  id?: string;
+  name?: string;
+  description?: string;
+  subtask?: boolean;
+  statusCategory?: JiraNamed;
+};
+
+export type JiraProjectDetail = {
+  key?: string;
+  name?: string;
+  description?: string;
+  projectTypeKey?: string;
+  lead?: JiraUser;
+  issueTypes?: JiraReferenceItem[];
+  components?: { name?: string; description?: string; lead?: JiraUser }[];
+  versions?: { name?: string; released?: boolean; archived?: boolean; releaseDate?: string }[];
+};
+
+export type JiraFilter = {
+  id?: string;
+  name?: string;
+  jql?: string;
+  description?: string;
+  owner?: JiraUser;
+};
+
+export type JiraRemoteLink = {
+  id?: number | string;
+  relationship?: string;
+  application?: { name?: string };
+  object?: { url?: string; title?: string; summary?: string };
+};
+
+export type JiraBoard = {
+  id?: number;
+  name?: string;
+  type?: string;
+  location?: { projectKey?: string; displayName?: string };
+};
+
+export type JiraSprint = {
+  id?: number;
+  name?: string;
+  state?: string;
+  startDate?: string;
+  endDate?: string;
+  goal?: string;
+};
+
+// startAt-paginated listings; the items live under a different key per endpoint.
+export type JiraPage = {
+  values?: unknown[];
+  worklogs?: unknown[];
+  isLast?: boolean;
+  total?: number;
+};
+
+export type JiraSprintIssues = JiraSearchResult & { startAt?: number; maxResults?: number };
