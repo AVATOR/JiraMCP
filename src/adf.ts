@@ -19,6 +19,9 @@ type AdfNode = {
   marks?: { type: string; attrs?: Record<string, any> }[];
 };
 
+// Documents come from third parties, so nesting beyond this is cut off instead of overflowing the stack.
+const MAX_DEPTH = 100;
+
 const DEFAULT_MAX_BLOCK_CHARS = 500;
 const DEFAULT_PREVIEW_CHARS = 300;
 
@@ -48,9 +51,79 @@ export function adfToMarkdown(node: unknown, options: AdfOptions = {}): string {
     return node;
   }
 
-  return renderBlock(node, options, 0)
+  const root = sanitize(node);
+
+  if (!root) {
+    return "";
+  }
+
+  return renderBlock(root, options, 0)
     .replace(/\n{3,}/g, "\n\n")
     .trim();
+}
+
+/**
+ * Whether the value is a non-null, non-array object.
+ *
+ * @param value Value to check.
+ * @returns True for plain objects.
+ */
+function isObject(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+/**
+ * Copies the tree into well-formed nodes: content is always an array of objects, attrs an object,
+ * and nesting is capped. Iterative, so a hostile document cannot overflow the stack here either.
+ *
+ * @param value Untrusted ADF value.
+ * @returns A safe root node, or null when the value is not an object.
+ */
+function sanitize(value: unknown): AdfNode | null {
+  if (!isObject(value)) {
+    return null;
+  }
+
+  const copy = (source: Record<string, unknown>): AdfNode => ({
+    type: typeof source.type === "string" ? source.type : undefined,
+    text: typeof source.text === "string" ? source.text : undefined,
+    attrs: isObject(source.attrs) ? source.attrs : undefined,
+    marks: Array.isArray(source.marks)
+      ? source.marks.filter(isObject).map((mark) => ({
+          type: typeof mark.type === "string" ? mark.type : "",
+          attrs: isObject(mark.attrs) ? mark.attrs : undefined
+        }))
+      : undefined
+  });
+
+  const root = copy(value);
+  const pending: { source: Record<string, unknown>; target: AdfNode; depth: number }[] = [
+    { source: value, target: root, depth: 0 }
+  ];
+
+  while (pending.length) {
+    const { source, target, depth } = pending.pop()!;
+
+    if (!Array.isArray(source.content)) {
+      continue;
+    }
+
+    if (depth >= MAX_DEPTH) {
+      target.content = [{ type: "text", text: "[nested content omitted]" }];
+      continue;
+    }
+
+    target.content = [];
+    for (const entry of source.content) {
+      if (isObject(entry)) {
+        const node = copy(entry);
+        target.content.push(node);
+        pending.push({ source: entry, target: node, depth: depth + 1 });
+      }
+    }
+  }
+
+  return root;
 }
 
 /**
@@ -176,7 +249,7 @@ function renderBlock(node: AdfNode, options: AdfOptions, depth: number): string 
     case "paragraph":
       return collapseIfPayload(renderInline(node.content), options);
     case "heading":
-      return `${"#".repeat(Math.min(Number(node.attrs?.level ?? 1), 6))} ${renderInline(node.content)}`;
+      return `${"#".repeat(Math.max(1, Math.min(Number(node.attrs?.level) || 1, 6)))} ${renderInline(node.content)}`;
     case "bulletList":
     case "orderedList":
     case "taskList":

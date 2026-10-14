@@ -4,7 +4,7 @@
 
 import { z } from "zod";
 import { adfToMarkdown } from "./adf.js";
-import { shortDate } from "./compact/common.js";
+import { list, shortDate } from "./compact/common.js";
 import { commentBody, issueDescription } from "./compact/jira.js";
 import { nextCursor } from "./query.js";
 import { storageToMarkdown } from "./storage.js";
@@ -122,22 +122,22 @@ export function issueData(
     reporter: person(fields.reporter),
     project: fields.project?.key,
     parent: fields.parent ? ref(fields.parent) : undefined,
-    labels: fields.labels ?? [],
+    labels: list<string>(fields.labels),
     components: names(fields.components),
     fixVersions: names(fields.fixVersions),
     due: fields.duedate ?? undefined,
     created: fields.created,
     updated: fields.updated,
     description: issueDescription(fields.description),
-    links: (fields.issuelinks ?? []).map((link: JiraIssueLink) => {
+    links: list<JiraIssueLink>(fields.issuelinks).map((link) => {
       const outward = !!link.outwardIssue;
       return {
         relation: (outward ? link.type?.outward : link.type?.inward) ?? link.type?.name,
         issue: ref(outward ? link.outwardIssue : link.inwardIssue)
       };
     }),
-    subtasks: (fields.subtasks ?? []).map(ref),
-    attachments: (fields.attachment ?? []).map((file: JiraAttachment) => ({
+    subtasks: list<JiraIssueRef>(fields.subtasks).map(ref),
+    attachments: list<JiraAttachment>(fields.attachment).map((file) => ({
       id: file.id === undefined ? undefined : String(file.id),
       filename: file.filename,
       mimeType: file.mimeType,
@@ -180,7 +180,7 @@ export function searchData(
   extraFields: string[] = [],
   customFields: CustomFieldMapping[] = []
 ): z.infer<z.ZodObject<typeof searchOutput>> {
-  const issues = result?.issues ?? [];
+  const issues = list<JiraIssue>(result?.issues);
   const more = result?.nextPageToken && result?.isLast !== true;
 
   return {
@@ -261,7 +261,7 @@ export const attachmentsOutput = {
  */
 export function attachmentsData(attachments: JiraAttachment[]): z.infer<z.ZodObject<typeof attachmentsOutput>> {
   return {
-    attachments: attachments.map((file) => ({
+    attachments: list<JiraAttachment>(attachments).map((file) => ({
       id: file.id === undefined ? undefined : String(file.id),
       filename: file.filename,
       mimeType: file.mimeType,

@@ -22,7 +22,7 @@ import type {
   JiraUser,
   JiraWorklog
 } from "../types.js";
-import { clip, countLine, EXTRA_CELL_CHARS, fileSize, shortDate, table, userName } from "./common.js";
+import { clip, countLine, list, EXTRA_CELL_CHARS, fileSize, shortDate, table, userName } from "./common.js";
 
 export type CommentView = {
   issueKey: string;
@@ -120,7 +120,7 @@ export function formatIssue(issue: JiraIssue, customFields: CustomFieldMapping[]
     ["Reporter", userName(fields.reporter)],
     ["Project", fields.project?.key],
     ["Parent", fields.parent ? `${fields.parent.key} — ${fields.parent.fields?.summary ?? ""}` : ""],
-    ["Labels", (fields.labels ?? []).join(", ")],
+    ["Labels", list<string>(fields.labels).join(", ")],
     ["Components", names(fields.components)],
     ["Fix versions", names(fields.fixVersions)],
     ["Due", fields.duedate ?? ""],
@@ -134,7 +134,7 @@ export function formatIssue(issue: JiraIssue, customFields: CustomFieldMapping[]
     }
   }
 
-  const links = (fields.issuelinks ?? []).map((link: JiraIssueLink) => {
+  const links = list<JiraIssueLink>(fields.issuelinks).map((link) => {
     const [direction, target] = link.outwardIssue
       ? [link.type?.outward, link.outwardIssue]
       : [link.type?.inward, link.inwardIssue];
@@ -145,7 +145,7 @@ export function formatIssue(issue: JiraIssue, customFields: CustomFieldMapping[]
     lines.push("", "## Links", ...links);
   }
 
-  const subtasks = (fields.subtasks ?? []).map(
+  const subtasks = list<JiraIssueRef>(fields.subtasks).map(
     (subtask: JiraIssueRef) =>
       `- ${subtask.key} — ${subtask.fields?.summary ?? ""} [${subtask.fields?.status?.name ?? ""}]`
   );
@@ -157,8 +157,9 @@ export function formatIssue(issue: JiraIssue, customFields: CustomFieldMapping[]
   const description = fieldValue(fields.description, { full: true });
   lines.push("", "## Description", description || "_(empty)_");
 
-  if ((fields.attachment ?? []).length) {
-    lines.push("", formatAttachments(fields.attachment ?? [], issue.key ?? ""));
+  const attachments = list<JiraAttachment>(fields.attachment);
+  if (attachments.length) {
+    lines.push("", formatAttachments(attachments, issue.key ?? ""));
   }
 
   for (const { id, alias } of customFields) {
@@ -284,7 +285,7 @@ export function formatSearch(
   extraFields: string[] = [],
   customFields: CustomFieldMapping[] = []
 ): string {
-  const issues = result?.issues ?? [];
+  const issues = list<JiraIssue>(result?.issues);
   const total =
     result?.total !== undefined
       ? ` of ${result.total}`
