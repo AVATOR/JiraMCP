@@ -2,11 +2,24 @@
 
 import { adfToMarkdown, isAdf, type AdfOptions } from "./adf.js";
 import { storageToMarkdown } from "./storage.js";
+import type {
+  ConfluencePage,
+  ConfluenceSearchResult,
+  ConfluenceSpace,
+  ConfluenceSpacePages,
+  CustomFieldMapping,
+  JiraAttachment,
+  JiraComment,
+  JiraField,
+  JiraIssue,
+  JiraIssueLink,
+  JiraIssueRef,
+  JiraProject,
+  JiraSearchResult,
+  JiraUser
+} from "./types.js";
 
-export type CustomFieldMapping = {
-  id: string;
-  alias: string;
-};
+export type { CustomFieldMapping };
 
 export type CommentView = {
   issueKey: string;
@@ -19,7 +32,7 @@ export type CommentView = {
 
 const DATE_LENGTH = 16; // "2026-09-18T11:12"
 
-function userName(user: any): string {
+function userName(user: JiraUser | null | undefined): string {
   if (!user) {
     return "—";
   }
@@ -30,7 +43,7 @@ function userName(user: any): string {
 function names(values: unknown): string {
   return Array.isArray(values)
     ? values
-        .map((value) => value?.name)
+        .map((value) => (value as { name?: string } | null)?.name)
         .filter(Boolean)
         .join(", ")
     : "";
@@ -46,8 +59,13 @@ function shortDate(value: unknown): string {
   return typeof value === "string" ? value.slice(0, DATE_LENGTH).replace("T", " ") : "—";
 }
 
+// Primitives print as-is; anything else is serialized instead of becoming "[object Object]".
+function scalar(value: unknown): string {
+  return typeof value === "object" && value !== null ? JSON.stringify(value) : String(value);
+}
+
 // Renders an arbitrary custom field value without dragging Jira metadata along.
-function fieldValue(value: any, options: AdfOptions = {}): string {
+function fieldValue(value: unknown, options: AdfOptions = {}): string {
   if (value === null || value === undefined || value === "") {
     return "";
   }
@@ -64,18 +82,19 @@ function fieldValue(value: any, options: AdfOptions = {}): string {
   }
 
   if (typeof value === "object") {
-    const label = value.displayName ?? value.value ?? value.name ?? value.key;
-    return label !== undefined ? String(label) : JSON.stringify(value);
+    const record = value as Record<string, unknown>;
+    const label = record.displayName ?? record.value ?? record.name ?? record.key;
+    return label !== undefined ? scalar(label) : JSON.stringify(value);
   }
 
-  return String(value);
+  return scalar(value);
 }
 
-export function formatIssue(issue: any, customFields: CustomFieldMapping[]): string {
+export function formatIssue(issue: JiraIssue, customFields: CustomFieldMapping[]): string {
   const fields = issue?.fields ?? {};
   const lines: string[] = [`# ${issue.key}: ${fields.summary ?? ""}`, ""];
 
-  const meta: [string, string][] = [
+  const meta: [string, string | undefined][] = [
     ["Status", fields.status?.name],
     ["Type", fields.issuetype?.name],
     ["Priority", fields.priority?.name],
@@ -98,7 +117,7 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
     }
   }
 
-  const links = (fields.issuelinks ?? []).map((link: any) => {
+  const links = (fields.issuelinks ?? []).map((link: JiraIssueLink) => {
     const [direction, target] = link.outwardIssue
       ? [link.type?.outward, link.outwardIssue]
       : [link.type?.inward, link.inwardIssue];
@@ -110,7 +129,8 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
   }
 
   const subtasks = (fields.subtasks ?? []).map(
-    (subtask: any) => `- ${subtask.key} — ${subtask.fields?.summary ?? ""} [${subtask.fields?.status?.name ?? ""}]`
+    (subtask: JiraIssueRef) =>
+      `- ${subtask.key} — ${subtask.fields?.summary ?? ""} [${subtask.fields?.status?.name ?? ""}]`
   );
 
   if (subtasks.length) {
@@ -121,7 +141,7 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
   lines.push("", "## Description", description || "_(empty)_");
 
   if ((fields.attachment ?? []).length) {
-    lines.push("", formatAttachments(fields.attachment, issue.key));
+    lines.push("", formatAttachments(fields.attachment ?? [], issue.key ?? ""));
   }
 
   for (const { id, alias } of customFields) {
@@ -153,7 +173,7 @@ function fileSize(bytes: unknown): string {
 
 // Jira keeps one attachment list per issue: files dropped on the description and
 // images pasted into comments both land here, so a single table covers both.
-export function formatAttachments(attachments: any[], issueKey: string): string {
+export function formatAttachments(attachments: JiraAttachment[], issueKey: string): string {
   const header = `## Attachments (${attachments.length}) — ${issueKey}`;
 
   if (!attachments.length) {
@@ -191,7 +211,7 @@ function truncate(text: string, maxLength: number, commentId: string): string {
   return `${text.slice(0, maxLength)}\n… [truncated ${text.length - maxLength} chars; full:true, commentId:${commentId}]`;
 }
 
-export function formatComment(comment: any, view: Pick<CommentView, "maxLength" | "full">): string {
+export function formatComment(comment: JiraComment, view: Pick<CommentView, "maxLength" | "full">): string {
   const id = String(comment.id);
   const body = adfToMarkdown(comment.body, { full: view.full, commentId: id });
   const edited =
@@ -201,7 +221,7 @@ export function formatComment(comment: any, view: Pick<CommentView, "maxLength" 
   return `${header}\n${view.full ? body : truncate(body, view.maxLength, id)}`;
 }
 
-export function formatComments(comments: any[], view: CommentView): string {
+export function formatComments(comments: JiraComment[], view: CommentView): string {
   const orderLabel = view.order === "desc" ? "newest first" : "oldest first";
   const sinceLabel = view.since ? `, since ${view.since}` : "";
   const header = `${view.issueKey} — showing ${comments.length} of ${view.total} comments (${orderLabel}${sinceLabel})`;
@@ -213,8 +233,8 @@ export function formatComments(comments: any[], view: CommentView): string {
   return [header, ...comments.map((comment) => formatComment(comment, view))].join("\n\n");
 }
 
-export function formatSearch(result: any): string {
-  const issues: any[] = result?.issues ?? [];
+export function formatSearch(result: JiraSearchResult): string {
+  const issues = result?.issues ?? [];
   const total = result?.total !== undefined ? ` of ${result.total}` : "";
   const more = result?.nextPageToken && result?.isLast !== true;
   const rows = issues.map((issue) => {
@@ -250,7 +270,7 @@ export function formatSearch(result: any): string {
 }
 
 // /rest/api/3/field: [{ id, name, custom, schema: { type } }].
-export function formatFields(fields: any[]): string {
+export function formatFields(fields: JiraField[]): string {
   const lines = [`${fields.length} fields`];
 
   if (fields.length) {
@@ -273,7 +293,7 @@ function countLine(label: string, shown: number, total: number): string {
 }
 
 // /rest/api/3/project/search values: [{ key, name, projectTypeKey, style }].
-export function formatProjects(projects: any[], total: number): string {
+export function formatProjects(projects: JiraProject[], total: number): string {
   const lines = [countLine("projects", projects.length, total)];
 
   if (projects.length) {
@@ -292,7 +312,7 @@ export function formatProjects(projects: any[], total: number): string {
 }
 
 // /rest/api/3/myself.
-export function formatCurrentUser(user: any): string {
+export function formatCurrentUser(user: JiraUser | undefined): string {
   const meta: [string, string | undefined][] = [
     ["Name", user?.displayName],
     ["Email", user?.emailAddress],
@@ -308,7 +328,7 @@ export function formatCurrentUser(user: any): string {
 }
 
 // /rest/api/3/user/search: [{ accountId, displayName, emailAddress, active, accountType }].
-export function formatUsers(users: any[]): string {
+export function formatUsers(users: JiraUser[]): string {
   const lines = [`${users.length} users`];
 
   if (users.length) {
@@ -327,7 +347,7 @@ export function formatUsers(users: any[]): string {
 }
 
 // v2 spaces: [{ id, key, name, type, status }].
-export function formatConfluenceSpaces(spaces: any[], total: number): string {
+export function formatConfluenceSpaces(spaces: ConfluenceSpace[], total: number): string {
   const lines = [countLine("spaces", spaces.length, total)];
 
   if (spaces.length) {
@@ -345,8 +365,8 @@ export function formatConfluenceSpaces(spaces: any[], total: number): string {
 }
 
 // v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
-export function formatConfluenceSearch(result: any): string {
-  const pages: any[] = result?.results ?? [];
+export function formatConfluenceSearch(result: ConfluenceSearchResult): string {
+  const pages = result?.results ?? [];
   const total = result?.totalSize !== undefined ? ` of ${result.totalSize}` : "";
   const lines = [`${pages.length}${total} pages`];
 
@@ -371,8 +391,8 @@ export function formatConfluenceSearch(result: any): string {
 }
 
 // v2 space pages: { results: [{ id, title, status, parentId, version: { createdAt } }], _links: { next } }.
-export function formatConfluenceSpacePages(result: any, spaceKey: string): string {
-  const pages: any[] = result?.results ?? [];
+export function formatConfluenceSpacePages(result: ConfluenceSpacePages, spaceKey: string): string {
+  const pages = result?.results ?? [];
   const lines = [`${spaceKey} — ${pages.length} pages`];
 
   if (pages.length) {
@@ -399,9 +419,9 @@ export function formatConfluenceSpacePages(result: any, spaceKey: string): strin
 }
 
 // v2 page with body-format=storage: { id, title, spaceId, parentId, version, body.storage.value, _links.webui }.
-export function formatConfluencePage(page: any, wikiBaseUrl: string): string {
+export function formatConfluencePage(page: ConfluencePage, wikiBaseUrl: string): string {
   const lines = [`# ${page?.title ?? ""}`, ""];
-  const meta: [string, string][] = [
+  const meta: [string, string | undefined][] = [
     ["Id", page?.id],
     ["Space id", page?.spaceId],
     ["Parent", page?.parentId],
