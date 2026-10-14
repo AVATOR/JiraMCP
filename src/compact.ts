@@ -19,6 +19,12 @@ export type CommentView = {
 
 const DATE_LENGTH = 16; // "2026-09-18T11:12"
 
+/**
+ * Display name of a Jira user with the email when it is available.
+ *
+ * @param user Jira user object, may be null.
+ * @returns "Name <email>", the name alone, or an em dash.
+ */
 function userName(user: any): string {
   if (!user) {
     return "—";
@@ -27,6 +33,12 @@ function userName(user: any): string {
   return user.emailAddress ? `${user.displayName} <${user.emailAddress}>` : (user.displayName ?? "—");
 }
 
+/**
+ * Comma-separated names of a list of Jira objects (components, versions).
+ *
+ * @param values Array of objects with a name.
+ * @returns Comma-separated names, empty string when not an array.
+ */
 function names(values: unknown): string {
   return Array.isArray(values)
     ? values
@@ -36,17 +48,35 @@ function names(values: unknown): string {
     : "";
 }
 
+/**
+ * Makes a value safe for a Markdown table cell (no pipes or line breaks).
+ *
+ * @param value Any value.
+ * @returns Single-line text that is safe inside a table cell.
+ */
 function cell(value: unknown): string {
   const text =
     typeof value === "string" || typeof value === "number" ? String(value) : value == null ? "" : JSON.stringify(value);
   return text.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
 }
 
+/**
+ * Shortens an ISO timestamp to "YYYY-MM-DD HH:MM".
+ *
+ * @param value ISO timestamp.
+ * @returns "YYYY-MM-DD HH:MM", or an em dash when not a string.
+ */
 function shortDate(value: unknown): string {
   return typeof value === "string" ? value.slice(0, DATE_LENGTH).replace("T", " ") : "—";
 }
 
-// Renders an arbitrary custom field value without dragging Jira metadata along.
+/**
+ * Renders an arbitrary custom field value without dragging Jira metadata along.
+ *
+ * @param value Raw field value (ADF, array, object or scalar).
+ * @param options ADF rendering options.
+ * @returns Readable text, empty string for empty values.
+ */
 function fieldValue(value: any, options: AdfOptions = {}): string {
   if (value === null || value === undefined || value === "") {
     return "";
@@ -71,6 +101,13 @@ function fieldValue(value: any, options: AdfOptions = {}): string {
   return String(value);
 }
 
+/**
+ * Renders an issue as Markdown: metadata, links, subtasks, description and custom fields.
+ *
+ * @param issue Issue payload from /rest/api/3/issue.
+ * @param customFields Custom fields to render as extra sections.
+ * @returns The issue as Markdown.
+ */
 export function formatIssue(issue: any, customFields: CustomFieldMapping[]): string {
   const fields = issue?.fields ?? {};
   const lines: string[] = [`# ${issue.key}: ${fields.summary ?? ""}`, ""];
@@ -134,6 +171,12 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
   return lines.join("\n");
 }
 
+/**
+ * Formats a byte count as a human-readable size.
+ *
+ * @param bytes Size in bytes.
+ * @returns Human-readable size such as "1.5 MB"; an em dash for non-numbers.
+ */
 function fileSize(bytes: unknown): string {
   const size = Number(bytes);
   if (!Number.isFinite(size)) {
@@ -151,8 +194,13 @@ function fileSize(bytes: unknown): string {
   return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
 }
 
-// Jira keeps one attachment list per issue: files dropped on the description and
-// images pasted into comments both land here, so a single table covers both.
+/**
+ * Jira keeps one attachment list per issue: files dropped on the description and images pasted into comments both land here, so a single table covers both.
+ *
+ * @param attachments Attachment objects of the issue.
+ * @param issueKey Issue key shown in the header.
+ * @returns Markdown table with a download hint.
+ */
 export function formatAttachments(attachments: any[], issueKey: string): string {
   const header = `## Attachments (${attachments.length}) — ${issueKey}`;
 
@@ -183,6 +231,14 @@ export function formatAttachments(attachments: any[], issueKey: string): string 
   ].join("\n");
 }
 
+/**
+ * Cuts text to maxLength and points at full:true for the rest.
+ *
+ * @param text Text to shorten.
+ * @param maxLength Characters to keep.
+ * @param commentId Comment id shown in the hint for getting the full text.
+ * @returns The text, or its start followed by a truncation note.
+ */
 function truncate(text: string, maxLength: number, commentId: string): string {
   if (text.length <= maxLength) {
     return text;
@@ -191,6 +247,13 @@ function truncate(text: string, maxLength: number, commentId: string): string {
   return `${text.slice(0, maxLength)}\n… [truncated ${text.length - maxLength} chars; full:true, commentId:${commentId}]`;
 }
 
+/**
+ * Renders one comment with its author, date and (possibly truncated) body.
+ *
+ * @param comment Comment payload.
+ * @param view Truncation limit and the full flag.
+ * @returns Heading line followed by the body.
+ */
 export function formatComment(comment: any, view: Pick<CommentView, "maxLength" | "full">): string {
   const id = String(comment.id);
   const body = adfToMarkdown(comment.body, { full: view.full, commentId: id });
@@ -201,6 +264,13 @@ export function formatComment(comment: any, view: Pick<CommentView, "maxLength" 
   return `${header}\n${view.full ? body : truncate(body, view.maxLength, id)}`;
 }
 
+/**
+ * Renders a list of comments under a header with the shown and total count.
+ *
+ * @param comments Comment payloads.
+ * @param view Issue key, totals, order and truncation settings.
+ * @returns Header line followed by the comments.
+ */
 export function formatComments(comments: any[], view: CommentView): string {
   const orderLabel = view.order === "desc" ? "newest first" : "oldest first";
   const sinceLabel = view.since ? `, since ${view.since}` : "";
@@ -213,6 +283,12 @@ export function formatComments(comments: any[], view: CommentView): string {
   return [header, ...comments.map((comment) => formatComment(comment, view))].join("\n\n");
 }
 
+/**
+ * Renders a Jira search result as a table, with nextPageToken when more pages exist.
+ *
+ * @param result Response of /rest/api/3/search/jql.
+ * @returns Table of issues, with nextPageToken when more exist.
+ */
 export function formatSearch(result: any): string {
   const issues: any[] = result?.issues ?? [];
   const total = result?.total !== undefined ? ` of ${result.total}` : "";
@@ -249,7 +325,12 @@ export function formatSearch(result: any): string {
   return lines.join("\n");
 }
 
-// /rest/api/3/field: [{ id, name, custom, schema: { type } }].
+/**
+ * /rest/api/3/field: [{ id, name, custom, schema: { type } }].
+ *
+ * @param fields Items of /rest/api/3/field.
+ * @returns Table of field ids, names and types.
+ */
 export function formatFields(fields: any[]): string {
   const lines = [`${fields.length} fields`];
 
@@ -268,11 +349,25 @@ export function formatFields(fields: any[]): string {
   return lines.join("\n");
 }
 
+/**
+ * Summary line for a listing that may have been cut by a limit.
+ *
+ * @param label Plural noun, e.g. projects.
+ * @param shown Items shown.
+ * @param total Items matching before the limit.
+ * @returns Count line such as "5 of 12 projects (raise limit or narrow query)".
+ */
 function countLine(label: string, shown: number, total: number): string {
   return shown < total ? `${shown} of ${total} ${label} (raise limit or narrow query)` : `${total} ${label}`;
 }
 
-// /rest/api/3/project/search values: [{ key, name, projectTypeKey, style }].
+/**
+ * /rest/api/3/project/search values: [{ key, name, projectTypeKey, style }].
+ *
+ * @param projects Projects to show.
+ * @param total Number of projects matching before the limit.
+ * @returns Table of project keys and names.
+ */
 export function formatProjects(projects: any[], total: number): string {
   const lines = [countLine("projects", projects.length, total)];
 
@@ -291,7 +386,12 @@ export function formatProjects(projects: any[], total: number): string {
   return lines.join("\n");
 }
 
-// /rest/api/3/myself.
+/**
+ * /rest/api/3/myself.
+ *
+ * @param user Response of /rest/api/3/myself.
+ * @returns Bullet list with name, email, account id and time zone.
+ */
 export function formatCurrentUser(user: any): string {
   const meta: [string, string | undefined][] = [
     ["Name", user?.displayName],
@@ -307,7 +407,12 @@ export function formatCurrentUser(user: any): string {
     .join("\n");
 }
 
-// /rest/api/3/user/search: [{ accountId, displayName, emailAddress, active, accountType }].
+/**
+ * /rest/api/3/user/search: [{ accountId, displayName, emailAddress, active, accountType }].
+ *
+ * @param users Items of /rest/api/3/user/search.
+ * @returns Table of account ids and names.
+ */
 export function formatUsers(users: any[]): string {
   const lines = [`${users.length} users`];
 
@@ -326,7 +431,13 @@ export function formatUsers(users: any[]): string {
   return lines.join("\n");
 }
 
-// v2 spaces: [{ id, key, name, type, status }].
+/**
+ * v2 spaces: [{ id, key, name, type, status }].
+ *
+ * @param spaces Spaces to show.
+ * @param total Number of spaces matching before the limit.
+ * @returns Table of space keys and names.
+ */
 export function formatConfluenceSpaces(spaces: any[], total: number): string {
   const lines = [countLine("spaces", spaces.length, total)];
 
@@ -344,7 +455,12 @@ export function formatConfluenceSpaces(spaces: any[], total: number): string {
   return lines.join("\n");
 }
 
-// v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
+/**
+ * v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
+ *
+ * @param result Response of the v1 CQL search.
+ * @returns Table of matching pages.
+ */
 export function formatConfluenceSearch(result: any): string {
   const pages: any[] = result?.results ?? [];
   const total = result?.totalSize !== undefined ? ` of ${result.totalSize}` : "";
@@ -370,7 +486,13 @@ export function formatConfluenceSearch(result: any): string {
   return lines.join("\n");
 }
 
-// v2 space pages: { results: [{ id, title, status, parentId, version: { createdAt } }], _links: { next } }.
+/**
+ * v2 space pages: { results: [{ id, title, status, parentId, version: { createdAt } }], _links: { next } }.
+ *
+ * @param result Response of the v2 space pages endpoint.
+ * @param spaceKey Space key shown in the header.
+ * @returns Table of pages, with the cursor when more exist.
+ */
 export function formatConfluenceSpacePages(result: any, spaceKey: string): string {
   const pages: any[] = result?.results ?? [];
   const lines = [`${spaceKey} — ${pages.length} pages`];
@@ -398,7 +520,13 @@ export function formatConfluenceSpacePages(result: any, spaceKey: string): strin
   return lines.join("\n");
 }
 
-// v2 page with body-format=storage: { id, title, spaceId, parentId, version, body.storage.value, _links.webui }.
+/**
+ * v2 page with body-format=storage: { id, title, spaceId, parentId, version, body.storage.value, _links.webui }.
+ *
+ * @param page v2 page with a storage-format body.
+ * @param wikiBaseUrl Base URL used to build the page link.
+ * @returns Title, metadata and body as Markdown.
+ */
 export function formatConfluencePage(page: any, wikiBaseUrl: string): string {
   const lines = [`# ${page?.title ?? ""}`, ""];
   const meta: [string, string][] = [

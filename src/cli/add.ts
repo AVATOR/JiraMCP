@@ -26,6 +26,12 @@ type ConfigTarget = {
   gitIgnorable: boolean;
 };
 
+/**
+ * Client config files the entry can be written to, relative to the working directory.
+ *
+ * @param cwd Project directory that holds the project-level config files.
+ * @returns Config files the entry can be written to.
+ */
 function targets(cwd: string): ConfigTarget[] {
   return [
     {
@@ -63,15 +69,37 @@ function targets(cwd: string): ConfigTarget[] {
   ];
 }
 
+/**
+ * Adds https:// when missing and strips trailing slashes.
+ *
+ * @param value URL as typed by the user.
+ * @returns URL with a scheme and no trailing slash.
+ */
 function normalizeBaseUrl(value: string): string {
   const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
   return withScheme.replace(/\/+$/, "");
 }
 
+/**
+ * Basic auth header value for an Atlassian email and API token.
+ *
+ * @param email Atlassian account email.
+ * @param apiToken Atlassian API token.
+ * @returns Value for the Authorization header.
+ */
 function authHeader(email: string, apiToken: string): string {
   return `Basic ${Buffer.from(`${email}:${apiToken}`).toString("base64")}`;
 }
 
+/**
+ * GETs a Jira endpoint as JSON; used for the wizard's project and field lookups.
+ *
+ * @param baseUrl Jira site URL.
+ * @param email Atlassian account email.
+ * @param apiToken Atlassian API token.
+ * @param endpoint Path with query, e.g. /rest/api/3/field.
+ * @returns Parsed JSON response; throws on a non-2xx status.
+ */
 async function jiraGet<T>(baseUrl: string, email: string, apiToken: string, endpoint: string): Promise<T> {
   const response = await fetch(`${baseUrl}${endpoint}`, {
     headers: { Authorization: authHeader(email, apiToken), Accept: "application/json" }
@@ -84,6 +112,12 @@ async function jiraGet<T>(baseUrl: string, email: string, apiToken: string, endp
   return (await response.json()) as T;
 }
 
+/**
+ * Reads a JSON config file; a missing file counts as empty, an invalid one is an error.
+ *
+ * @param file Path of the config file.
+ * @returns Parsed object, or an empty one when the file does not exist.
+ */
 async function readJson(file: string): Promise<Record<string, any>> {
   try {
     const raw = await readFile(file, "utf8");
@@ -98,6 +132,13 @@ async function readJson(file: string): Promise<Record<string, any>> {
   }
 }
 
+/**
+ * Returns the nested object at the key path, creating missing levels.
+ *
+ * @param root Config object to descend into.
+ * @param keys Key path, e.g. ["mcpServers"].
+ * @returns The nested object at that path.
+ */
 function getIn(root: Record<string, any>, keys: string[]): Record<string, any> {
   let node = root;
 
@@ -112,6 +153,12 @@ function getIn(root: Record<string, any>, keys: string[]): Record<string, any> {
   return node;
 }
 
+/**
+ * Whether the file is accessible.
+ *
+ * @param file Path to check.
+ * @returns True when the file is accessible.
+ */
 async function exists(file: string): Promise<boolean> {
   try {
     await access(file);
@@ -121,8 +168,10 @@ async function exists(file: string): Promise<boolean> {
   }
 }
 
-// A checkout of this repo can be run straight from dist/, which avoids the npx
-// resolution step; an installed copy under node_modules should use npx instead.
+/**
+ * A checkout of this repo can be run straight from dist/, which avoids the npx resolution step; an installed copy under node_modules should use npx instead.
+ * @returns Path to dist/index.js of a local checkout, or undefined when running from node_modules.
+ */
 async function findLocalCheckout(): Promise<string | undefined> {
   const entry = path.resolve(fileURLToPath(import.meta.url), "..", "..", "index.js");
 
@@ -133,6 +182,13 @@ async function findLocalCheckout(): Promise<string | undefined> {
   return undefined;
 }
 
+/**
+ * Appends the entry to .gitignore unless already listed; returns whether it was added.
+ *
+ * @param cwd Project directory that holds .gitignore.
+ * @param entry Path to ignore, relative to cwd.
+ * @returns True when the entry was added, false when it was already listed.
+ */
 async function ensureGitIgnored(cwd: string, entry: string) {
   const file = path.join(cwd, ".gitignore");
   let content = "";
@@ -154,6 +210,14 @@ async function ensureGitIgnored(cwd: string, entry: string) {
   return true;
 }
 
+/**
+ * Asks for the default project key, listing the available keys as a hint.
+ *
+ * @param baseUrl Jira site URL.
+ * @param email Atlassian account email.
+ * @param apiToken Atlassian API token.
+ * @returns Upper-cased project key, or an empty string.
+ */
 async function pickDefaultProject(baseUrl: string, email: string, apiToken: string): Promise<string> {
   type ProjectPage = { values?: { key: string; name: string }[] };
 
@@ -178,6 +242,14 @@ async function pickDefaultProject(baseUrl: string, email: string, apiToken: stri
   return value.toUpperCase();
 }
 
+/**
+ * Asks for field names and resolves them to JIRA_CUSTOM_FIELDS id:alias pairs.
+ *
+ * @param baseUrl Jira site URL.
+ * @param email Atlassian account email.
+ * @param apiToken Atlassian API token.
+ * @returns JIRA_CUSTOM_FIELDS value (id:alias pairs), empty when none were chosen.
+ */
 async function pickCustomFields(baseUrl: string, email: string, apiToken: string): Promise<string> {
   const wanted = await ask("Custom fields to expose, by display name, comma separated (optional)", {
     defaultValue: ""
@@ -226,6 +298,12 @@ async function pickCustomFields(baseUrl: string, email: string, apiToken: string
   return mappings.join(",");
 }
 
+/**
+ * Collects the Jira connection details and builds the MCP server entry.
+ *
+ * @param printOnly Skip the local checkout lookup so the entry always uses npx.
+ * @returns The server entry and a suggested server name.
+ */
 async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; suggestedName: string }> {
   const baseUrl = normalizeBaseUrl(
     await ask("Jira base URL", {
@@ -330,6 +408,13 @@ async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; sug
   return { entry, suggestedName: defaultProject ? `jira_${defaultProject.toLowerCase()}` : "jira" };
 }
 
+/**
+ * Configures one Jira instance; returns whether the user wants to add another.
+ *
+ * @param cwd Project directory the config is written relative to.
+ * @param printOnly Print the JSON instead of writing a config file.
+ * @returns True when the user wants to add another instance.
+ */
 async function addOne(cwd: string, printOnly: boolean): Promise<boolean> {
   const { entry, suggestedName } = await buildEntry(printOnly);
 
@@ -387,6 +472,7 @@ async function addOne(cwd: string, printOnly: boolean): Promise<boolean> {
   return await confirm("Add another Jira instance?", false);
 }
 
+/** Entry point of the setup wizard (--print only outputs the JSON). */
 async function main() {
   const major = Number(process.versions.node.split(".")[0]);
 
