@@ -70,13 +70,17 @@ test("lists every tool with an input schema", async () => {
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "confluence_get_page",
     "confluence_get_space_pages",
+    "confluence_list_spaces",
     "confluence_search_pages",
     "jira_download_attachment",
+    "jira_find_users",
     "jira_get_comments",
+    "jira_get_current_user",
     "jira_get_issue",
     "jira_get_project_issues",
     "jira_list_attachments",
     "jira_list_fields",
+    "jira_list_projects",
     "jira_search_issues"
   ]);
 
@@ -472,4 +476,94 @@ test("confluence_get_space_pages reports an unknown space", async () => {
 
   assert.equal(result.isError, true);
   assert.match(text, /Confluence space not found: NOPE/);
+});
+
+test("reference listings are cached between calls", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/field": () => json([{ id: "summary", name: "Summary", custom: false }]),
+    "/rest/api/3/myself": () => json({ accountId: "u1", displayName: "Me" })
+  });
+
+  await call(client, "jira_list_fields", {});
+  await call(client, "jira_list_fields", { query: "summ" });
+  await call(client, "jira_get_current_user", {});
+  await call(client, "jira_get_current_user", {});
+
+  assert.equal(calls.filter((entry) => entry.url.pathname === "/rest/api/3/field").length, 1);
+  assert.equal(calls.filter((entry) => entry.url.pathname === "/rest/api/3/myself").length, 1);
+});
+
+test("a failed listing is not cached", async () => {
+  let attempts = 0;
+  const { client } = await connect({
+    "/rest/api/3/field": () =>
+      ++attempts === 1 ? new Response("boom", { status: 500, statusText: "Server Error" }) : json([])
+  });
+
+  const first = await call(client, "jira_list_fields", {});
+  const second = await call(client, "jira_list_fields", {});
+
+  assert.equal(first.result.isError, true);
+  assert.notEqual(second.result.isError, true);
+});
+
+test("jira_list_projects walks every page and filters by name or key", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/project/search": (url) =>
+      url.searchParams.get("startAt") === "0"
+        ? json({
+            isLast: false,
+            values: [{ key: "ABC", name: "Alpha", projectTypeKey: "software", style: "next-gen" }]
+          })
+        : json({ isLast: true, values: [{ key: "XYZ", name: "Beta Team", projectTypeKey: "business" }] })
+  });
+
+  const all = await call(client, "jira_list_projects", {});
+  assert.match(all.text, /^2 projects/);
+  assert.match(all.text, /\| ABC \| Alpha \| software \| next-gen \|/);
+
+  const filtered = await call(client, "jira_list_projects", { query: "beta" });
+  assert.match(filtered.text, /^1 projects/);
+  assert.doesNotMatch(filtered.text, /Alpha/);
+
+  const limited = await call(client, "jira_list_projects", { limit: 1 });
+  assert.match(limited.text, /^1 of 2 projects/);
+  assert.equal(calls.length, 2, "second page fetched once, the rest served from the cache");
+});
+
+test("jira_get_current_user and jira_find_users show account ids", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/myself": () => json({ accountId: "u1", displayName: "Me", emailAddress: "me@example.com" }),
+    "/rest/api/3/user/search": () =>
+      json([{ accountId: "u2", displayName: "Anna", emailAddress: "anna@example.com", active: true }])
+  });
+
+  const me = await call(client, "jira_get_current_user", {});
+  assert.match(me.text, /\*\*Account id:\*\* u1/);
+
+  const found = await call(client, "jira_find_users", { query: "ann", limit: 5 });
+  assert.match(found.text, /\| u2 \| Anna \| anna@example.com \| yes \|/);
+  const search = calls.find((entry) => entry.url.pathname === "/rest/api/3/user/search")!;
+  assert.equal(search.url.searchParams.get("query"), "ann");
+  assert.equal(search.url.searchParams.get("maxResults"), "5");
+});
+
+test("confluence_list_spaces follows cursors and filters", async () => {
+  const { client } = await connect({
+    "/wiki/api/v2/spaces": (url) =>
+      url.searchParams.get("cursor")
+        ? json({ results: [{ id: "2", key: "~me", name: "My space", type: "personal", status: "current" }] })
+        : json({
+            results: [{ id: "1", key: "MS", name: "Main", type: "global", status: "current" }],
+            _links: { next: "/wiki/api/v2/spaces?cursor=c2&limit=250" }
+          })
+  });
+
+  const all = await call(client, "confluence_list_spaces", {});
+  assert.match(all.text, /^2 spaces/);
+
+  const personal = await call(client, "confluence_list_spaces", { type: "personal" });
+  assert.match(personal.text, /^1 spaces/);
+  assert.match(personal.text, /~me/);
+  assert.doesNotMatch(personal.text, /Main/);
 });
