@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -22,17 +22,19 @@ export function sanitizeFileName(name: string): string {
 }
 
 /**
- * Saves a downloaded file to disk and builds the tool result, inlining images that are small enough.
+ * Streams a file to disk through the given download and builds the tool result, inlining images that are small enough.
  *
- * @param file Downloaded bytes and the attachment's identity.
+ * @param file The attachment's identity and the mime type its metadata announced.
  * @param options Where to save and whether to inline images.
+ * @param download Writes the content to the target path; overwrite is false for explicit output paths.
  * @returns MCP tool result with the saved path and, for images, the image itself.
  */
 async function saveDownload(
-  file: { data: Buffer; mimeType: string; id: string; filename?: string },
-  options: { downloadDir: string; outputPath?: string; inline?: boolean }
+  file: { mimeType?: string; id: string; filename?: string },
+  options: { downloadDir: string; outputPath?: string; inline?: boolean },
+  download: (target: string, overwrite: boolean) => Promise<{ bytes: number; mimeType: string }>
 ) {
-  const { data, mimeType, id, filename } = file;
+  const { id, filename } = file;
   const fileName = `${id}-${sanitizeFileName(filename ?? id)}`;
   let target = path.join(options.downloadDir, fileName);
 
@@ -48,26 +50,22 @@ async function saveDownload(
   await mkdir(path.dirname(target), { recursive: true });
   // Attachment content is untrusted, so an explicit path must not clobber an existing file
   // (e.g. a shell profile); the default download dir is ours and may be overwritten.
-  await writeFile(target, data, { flag: options.outputPath ? "wx" : "w" }).catch((error: NodeJS.ErrnoException) => {
-    if (error?.code === "EEXIST") {
-      throw new Error(`Refusing to overwrite existing file: ${target}`);
-    }
-    throw error;
-  });
+  const { bytes, mimeType: downloadedType } = await download(target, !options.outputPath);
+  const mimeType = file.mimeType || downloadedType;
 
   const isImage = mimeType.startsWith("image/");
-  const tooLarge = data.byteLength > MAX_INLINE_IMAGE_BYTES;
+  const tooLarge = bytes > MAX_INLINE_IMAGE_BYTES;
   const content: ({ type: "text"; text: string } | { type: "image"; data: string; mimeType: string })[] = [
     {
       type: "text",
       text:
-        `Saved ${filename ?? id} (${mimeType}, ${data.byteLength} bytes) to ${target}` +
+        `Saved ${filename ?? id} (${mimeType}, ${bytes} bytes) to ${target}` +
         (isImage && tooLarge ? "\nImage not inlined: larger than the inline limit; read the saved file instead." : "")
     }
   ];
 
   if (isImage && !tooLarge && options.inline !== false) {
-    content.push({ type: "image", data: data.toString("base64"), mimeType });
+    content.push({ type: "image", data: (await readFile(target)).toString("base64"), mimeType });
   }
 
   return { content };
@@ -119,10 +117,10 @@ export function registerAttachmentTools(
         throw new Error(`Attachment ${attachmentId} is ${meta.size} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);
       }
 
-      const { data, mimeType } = await jira.downloadAttachment(attachmentId);
       return saveDownload(
-        { data, mimeType: meta?.mimeType || mimeType, id: attachmentId, filename: meta?.filename },
-        { downloadDir, outputPath, inline }
+        { mimeType: meta?.mimeType, id: attachmentId, filename: meta?.filename },
+        { downloadDir, outputPath, inline },
+        (target, overwrite) => jira.downloadAttachment(attachmentId, target, overwrite)
       );
     }
   );
@@ -149,10 +147,10 @@ export function registerAttachmentTools(
         );
       }
 
-      const { data, mimeType } = await confluence.downloadAttachment(meta);
       return saveDownload(
-        { data, mimeType: meta?.mediaType || mimeType, id: attachmentId, filename: meta?.title },
-        { downloadDir, outputPath, inline }
+        { mimeType: meta?.mediaType, id: attachmentId, filename: meta?.title },
+        { downloadDir, outputPath, inline },
+        (target, overwrite) => confluence.downloadAttachment(meta, target, overwrite)
       );
     }
   );

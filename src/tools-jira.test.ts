@@ -624,3 +624,27 @@ test("Agile tools list boards, sprints and sprint issues with paging", async () 
   assert.match(issues.text, /\| ABC-1 \| One \|/);
   assert.match(issues.text, /nextStartAt: 1/);
 });
+
+test("jira_download_attachment stops a stream that outgrows the limit and leaves no partial file", async () => {
+  const chunk = Buffer.alloc(1024 * 1024);
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(chunk);
+      sent += 1;
+    }
+  });
+  const { client } = await connect({
+    "/rest/api/3/attachment/10": () => json({ id: "10", filename: "big.bin", mimeType: "application/octet-stream" }),
+    // No content-length, so only the streaming limit can catch this.
+    "/rest/api/3/attachment/content/10": () =>
+      new Response(body, { headers: { "content-type": "application/octet-stream" } })
+  });
+
+  const { result, text } = await call(client, "jira_download_attachment", { attachmentId: "10" });
+
+  assert.equal(result.isError, true);
+  assert.match(text, /above the .*-byte limit/);
+  assert.ok(sent < 200, "the download was cut off early");
+  await assert.rejects(readFile(path.join(downloadDir, "10-big.bin")));
+});

@@ -1,3 +1,8 @@
+import { createWriteStream } from "node:fs";
+import { unlink } from "node:fs/promises";
+import { Readable, Transform } from "node:stream";
+import { pipeline } from "node:stream/promises";
+import type { ReadableStream as WebReadableStream } from "node:stream/web";
 import { basicAuthHeader } from "./auth.js";
 import type { JsonValue } from "./types.js";
 
@@ -6,7 +11,7 @@ const MAX_RETRIES = 3;
 // Rate limiting and transient gateway errors; everything else is returned to the caller as-is.
 const RETRY_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ERROR_BODY_CHARS = 1000;
-// Attachments are buffered in memory, so very large files are refused up front.
+// Very large files are refused up front, and cut off while streaming when the size was not announced.
 export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 // Safety cap when walking a paginated listing to its end.
 export const MAX_LIST_PAGES = 20;
@@ -124,15 +129,22 @@ export class AtlassianHttp {
   }
 
   /**
-   * Downloads file content into memory, refusing files above the size limit. Atlassian redirects
+   * Streams file content to disk, refusing files above the size limit. Atlassian redirects
    * attachment content to a signed media URL; fetch follows it and drops the Authorization header
    * cross-origin, which that URL does not need.
    *
    * @param path API path of the content endpoint.
    * @param label Name of the file used in error messages.
-   * @returns File bytes and mime type.
+   * @param target File to write.
+   * @param overwrite Replace an existing file; when false the download fails if the file exists.
+   * @returns Number of bytes written and the mime type.
    */
-  async download(path: string, label: string): Promise<{ data: Buffer; mimeType: string }> {
+  async downloadToFile(
+    path: string,
+    label: string,
+    target: string,
+    overwrite: boolean
+  ): Promise<{ bytes: number; mimeType: string }> {
     const response = await this.fetchWithRetry(new URL(`${this.baseUrl}${path}`), "*/*");
 
     if (!response.ok) {
@@ -145,9 +157,38 @@ export class AtlassianHttp {
       throw new Error(`Attachment ${label} is ${length} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);
     }
 
-    return {
-      data: Buffer.from(await response.arrayBuffer()),
-      mimeType: (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim()
-    };
+    const mimeType = (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim();
+    let bytes = 0;
+
+    // The announced length can be missing or wrong, so the limit is enforced on the stream too.
+    const limiter = new Transform({
+      transform(chunk: Buffer, _encoding, callback) {
+        bytes += chunk.length;
+        callback(
+          bytes > MAX_DOWNLOAD_BYTES
+            ? new Error(`Attachment ${label} is above the ${MAX_DOWNLOAD_BYTES}-byte limit`)
+            : null,
+          chunk
+        );
+      }
+    });
+
+    try {
+      await pipeline(
+        response.body ? Readable.fromWeb(response.body as WebReadableStream) : Readable.from([]),
+        limiter,
+        createWriteStream(target, { flags: overwrite ? "w" : "wx" })
+      );
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException)?.code === "EEXIST") {
+        throw new Error(`Refusing to overwrite existing file: ${target}`, { cause: error });
+      }
+
+      // Do not leave a truncated file behind.
+      await unlink(target).catch(() => undefined);
+      throw error;
+    }
+
+    return { bytes, mimeType };
   }
 }
