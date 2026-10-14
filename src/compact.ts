@@ -30,6 +30,8 @@ export type CommentView = {
   full: boolean;
 };
 
+// Long values (descriptions) would blow up a table row, so extra columns are clipped.
+const EXTRA_CELL_CHARS = 200;
 const DATE_LENGTH = 16; // "2026-09-18T11:12"
 
 /**
@@ -81,6 +83,17 @@ function cell(value: unknown): string {
  */
 function shortDate(value: unknown): string {
   return typeof value === "string" ? value.slice(0, DATE_LENGTH).replace("T", " ") : "—";
+}
+
+/**
+ * Clips text to a maximum length with an ellipsis.
+ *
+ * @param text Text to clip.
+ * @param max Maximum number of characters kept.
+ * @returns The text, shortened when longer than max.
+ */
+function clip(text: string, max: number): string {
+  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /**
@@ -309,12 +322,28 @@ export function formatComments(comments: JiraComment[], view: CommentView): stri
 }
 
 /**
+ * Extracts the cursor of the next page from a Confluence `_links.next` URL.
+ *
+ * @param links `_links` object of a paginated Confluence response.
+ * @returns Cursor value, or null on the last page.
+ */
+function nextCursor(links: { next?: string } | undefined): string | null {
+  return typeof links?.next === "string" ? new URL(links.next, "http://x").searchParams.get("cursor") : null;
+}
+
+/**
  * Renders a Jira search result as a table, with nextPageToken when more pages exist.
  *
  * @param result Response of /rest/api/3/search/jql.
+ * @param extraFields Extra requested field ids, shown as additional columns.
+ * @param customFields Id-to-alias mappings, used for the extra column headers.
  * @returns Table of issues, with nextPageToken when more exist.
  */
-export function formatSearch(result: JiraSearchResult): string {
+export function formatSearch(
+  result: JiraSearchResult,
+  extraFields: string[] = [],
+  customFields: CustomFieldMapping[] = []
+): string {
   const issues = result?.issues ?? [];
   const total = result?.total !== undefined ? ` of ${result.total}` : "";
   const more = result?.nextPageToken && result?.isLast !== true;
@@ -327,18 +356,20 @@ export function formatSearch(result: JiraSearchResult): string {
       f.issuetype?.name ?? "",
       f.priority?.name ?? "",
       f.assignee?.displayName ?? "—",
-      shortDate(f.updated)
+      shortDate(f.updated),
+      ...extraFields.map((id) => clip(fieldValue(f[id]), EXTRA_CELL_CHARS))
     ].map(cell);
     return `| ${cells.join(" | ")} |`;
   });
+  const extraHeaders = extraFields.map((id) => customFields.find((field) => field.id === id)?.alias ?? id);
 
   const lines = [`${issues.length}${total} issues${more ? " (more available)" : ""}`];
 
   if (rows.length) {
     lines.push(
       "",
-      "| Key | Summary | Status | Type | Priority | Assignee | Updated |",
-      "|---|---|---|---|---|---|---|",
+      `| ${["Key", "Summary", "Status", "Type", "Priority", "Assignee", "Updated", ...extraHeaders].join(" | ")} |`,
+      `|${"---|".repeat(7 + extraFields.length)}`,
       ...rows
     );
   }
@@ -508,6 +539,11 @@ export function formatConfluenceSearch(result: ConfluenceSearchResult): string {
     );
   }
 
+  const cursor = nextCursor(result?._links);
+  if (cursor) {
+    lines.push("", `cursor: ${cursor}`);
+  }
+
   return lines.join("\n");
 }
 
@@ -534,10 +570,7 @@ export function formatConfluenceSpacePages(result: ConfluenceSpacePages, spaceKe
     );
   }
 
-  const cursor =
-    typeof result?._links?.next === "string"
-      ? new URL(result._links.next, "http://x").searchParams.get("cursor")
-      : null;
+  const cursor = nextCursor(result?._links);
   if (cursor) {
     lines.push("", `cursor: ${cursor}`);
   }

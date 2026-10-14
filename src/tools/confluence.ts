@@ -46,11 +46,12 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         spaceKey: z.string().min(1).optional().describe("Only search this space (e.g., 'MS')."),
         titleOnly: z.boolean().optional().describe("Match page titles only, not the body."),
         limit: z.number().int().min(1).max(100).optional().describe("Max pages to return (default 25)."),
+        cursor: z.string().optional().describe("Cursor from the previous result, to fetch the next page."),
         raw: rawFlag
       }
     },
-    async ({ query, spaceKey, titleOnly, limit, raw }) => {
-      const result = await client.searchPages({ query, spaceKey, titleOnly, limit: limit ?? 25 });
+    async ({ query, spaceKey, titleOnly, limit, cursor, raw }) => {
+      const result = await client.searchPages({ query, spaceKey, titleOnly, limit: limit ?? 25, cursor });
       return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceSearch(result));
     }
   );

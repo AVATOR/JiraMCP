@@ -567,3 +567,76 @@ test("confluence_list_spaces follows cursors and filters", async () => {
   assert.match(personal.text, /~me/);
   assert.doesNotMatch(personal.text, /Main/);
 });
+
+test("jira_search_issues fields adds extra columns and requests the fields from Jira", async () => {
+  const { client, calls } = await connect(
+    {
+      "/rest/api/3/search/jql": () =>
+        json({
+          issues: [
+            {
+              key: "ABC-1",
+              fields: {
+                summary: "One",
+                labels: ["a", "b"],
+                customfield_7: { value: "High" },
+                description: "x".repeat(300)
+              }
+            }
+          ]
+        })
+    },
+    { customFields: [{ id: "customfield_7", alias: "impact" }] }
+  );
+
+  const { text } = await call(client, "jira_search_issues", {
+    jql: "project = ABC",
+    fields: ["labels", "customfield_7", "description"]
+  });
+
+  assert.match(text, /\| Updated \| labels \| impact \| description \|/);
+  assert.match(text, /\| ABC-1 \| One \|.*\| a, b \| High \| x{200}… \|/);
+  assert.match(calls[0].url.searchParams.get("fields") ?? "", /^summary,.*,updated,labels,customfield_7,description$/);
+});
+
+test("confluence_search_pages escapes CQL operator characters", async () => {
+  const { client, calls } = await connect({
+    "/wiki/rest/api/search": () => json({ totalSize: 0, results: [] })
+  });
+
+  await call(client, "confluence_search_pages", { query: "C++ (v2)? a-b" });
+
+  assert.equal(
+    calls[0].url.searchParams.get("cql"),
+    'type = page AND text ~ "C\\\\+\\\\+ \\\\(v2\\\\)\\\\? a\\\\-b" ORDER BY lastmodified DESC'
+  );
+});
+
+test("confluence_search_pages passes the cursor through and shows the next one", async () => {
+  const { client, calls } = await connect({
+    "/wiki/rest/api/search": () =>
+      json({ totalSize: 40, results: [], _links: { next: "/rest/api/search?cql=x&limit=1&cursor=abc%3D&start=1" } })
+  });
+
+  const { text } = await call(client, "confluence_search_pages", { query: "plan", cursor: "prev" });
+
+  assert.equal(calls[0].url.searchParams.get("cursor"), "prev");
+  assert.match(text, /cursor: abc=/);
+});
+
+for (const status of [502, 504]) {
+  test(`${status} responses are retried`, async () => {
+    let attempts = 0;
+    const { client, calls } = await connect({
+      "/rest/api/3/issue/ABC-1": () =>
+        ++attempts < 2
+          ? new Response("bad gateway", { status, headers: { "retry-after": "0" } })
+          : json({ key: "ABC-1", fields: { summary: "Recovered" } })
+    });
+
+    const { text } = await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+
+    assert.match(text, /Recovered/);
+    assert.equal(calls.length, 2);
+  });
+}

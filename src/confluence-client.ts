@@ -1,6 +1,6 @@
 import type { ReferenceCache } from "./cache.js";
 import { MAX_LIST_PAGES, type AtlassianHttp } from "./http.js";
-import { jqlString } from "./query.js";
+import { cqlSearchString, jqlString } from "./query.js";
 import type {
   ConfluencePage,
   ConfluenceSearchResult,
@@ -37,7 +37,7 @@ export class ConfluenceClient {
   /**
    * The v2 pages endpoint only filters by exact title, so fuzzy and full-text search go through v1 CQL.
    *
-   * @param params Query text, limit and optional space and title-only restriction.
+   * @param params Query text, limit, optional space and title-only restriction, and page cursor.
    * @returns Raw v1 search response.
    */
   async searchPages(params: {
@@ -45,17 +45,23 @@ export class ConfluenceClient {
     limit: number;
     spaceKey?: string;
     titleOnly?: boolean;
+    cursor?: string;
   }): Promise<ConfluenceSearchResult> {
     const clauses = [
       "type = page",
-      `${params.titleOnly ? "title" : "text"} ~ ${jqlString(params.query)}`,
+      `${params.titleOnly ? "title" : "text"} ~ ${cqlSearchString(params.query)}`,
       ...(params.spaceKey ? [`space = ${jqlString(params.spaceKey)}`] : [])
     ];
 
-    return this.http.get<ConfluenceSearchResult>("/wiki/rest/api/search", {
+    const query: Record<string, string> = {
       cql: `${clauses.join(" AND ")} ORDER BY lastmodified DESC`,
       limit: String(params.limit)
-    });
+    };
+    if (params.cursor) {
+      query.cursor = params.cursor;
+    }
+
+    return this.http.get<ConfluenceSearchResult>("/wiki/rest/api/search", query);
   }
 
   /**
