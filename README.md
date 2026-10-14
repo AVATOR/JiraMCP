@@ -9,8 +9,8 @@ TypeScript MCP server for Jira Cloud with read-only access.
 - List project issues
 - Read comments for an issue (newest first, date filter, truncation of large payloads)
 - List and download issue attachments (images are returned inline)
-- Find field ids (including `customfield_*`) by name
-- Read Confluence pages as Markdown, full-text search them (optionally per space) and list a space's pages
+- Find field ids (including `customfield_*`) by name, list projects, find users and the current user
+- Read Confluence pages as Markdown, full-text search them (optionally per space) and list spaces and a space's pages
 
 This server does not expose any methods for creating or updating issues, comments, transitions, or any other Jira entities.
 
@@ -153,9 +153,13 @@ npm run setup    # run the setup wizard from source
 - `jira_list_attachments`
 - `jira_download_attachment`
 - `jira_list_fields`
+- `jira_list_projects`
+- `jira_get_current_user`
+- `jira_find_users`
 - `confluence_get_page`
 - `confluence_search_pages`
 - `confluence_get_space_pages`
+- `confluence_list_spaces`
 
 ## Security model
 
