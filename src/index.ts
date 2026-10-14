@@ -16,6 +16,7 @@ dotenv.config({
   quiet: true
 });
 
+/** Reads a required environment variable or fails with its name. */
 function getRequiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {
@@ -25,6 +26,7 @@ function getRequiredEnv(name: string): string {
   return value;
 }
 
+/** Builds the server from the environment and serves it over stdio. */
 async function main() {
   const server = createServer({
     baseUrl: getRequiredEnv("JIRA_BASE_URL"),

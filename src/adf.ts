@@ -22,10 +22,12 @@ type AdfNode = {
 const DEFAULT_MAX_BLOCK_CHARS = 500;
 const DEFAULT_PREVIEW_CHARS = 300;
 
+/** Whether the value is an Atlassian Document Format document (root node of type "doc"). */
 export function isAdf(value: unknown): value is AdfNode {
   return !!value && typeof value === "object" && (value as AdfNode).type === "doc";
 }
 
+/** Converts an ADF document to Markdown; plain strings pass through and empty values give "". */
 export function adfToMarkdown(node: unknown, options: AdfOptions = {}): string {
   if (node === null || node === undefined) {
     return "";
@@ -40,6 +42,7 @@ export function adfToMarkdown(node: unknown, options: AdfOptions = {}): string {
     .trim();
 }
 
+/** Renders the child blocks of a node and joins the non-empty results. */
 function renderChildren(node: AdfNode, options: AdfOptions, depth: number, separator = "\n\n"): string {
   return (node.content ?? [])
     .map((child) => renderBlock(child, options, depth))
@@ -47,10 +50,12 @@ function renderChildren(node: AdfNode, options: AdfOptions, depth: number, separ
     .join(separator);
 }
 
+/** Renders a run of inline nodes (text, mentions, emoji) into one string. */
 function renderInline(nodes: AdfNode[] | undefined): string {
   return (nodes ?? []).map(renderInlineNode).join("");
 }
 
+/** Renders a single inline node. */
 function renderInlineNode(node: AdfNode): string {
   switch (node.type) {
     case "text":
@@ -88,6 +93,7 @@ function mediaLabel(node: AdfNode): string {
   return `[attachment${name ? `: ${name}` : ""} — use jira_list_attachments / jira_download_attachment]`;
 }
 
+/** Wraps text in Markdown for ADF marks (bold, italic, code, strike, link). */
 function applyMarks(text: string, marks: AdfNode["marks"]): string {
   let result = text;
 
@@ -116,6 +122,7 @@ function applyMarks(text: string, marks: AdfNode["marks"]): string {
   return result;
 }
 
+/** Renders a block node; unknown node types fall back to their text content. */
 function renderBlock(node: AdfNode, options: AdfOptions, depth: number): string {
   switch (node.type) {
     case "doc":
@@ -182,12 +189,14 @@ const INLINE_TYPES = new Set([
   "placeholder"
 ]);
 
+/** Whether the node holds inline content instead of nested blocks. */
 function isInline(node: AdfNode): boolean {
   return INLINE_TYPES.has(node.type ?? "");
 }
 
 const NESTED_LIST_TYPES = new Set(["bulletList", "orderedList", "taskList", "decisionList"]);
 
+/** Returns the bullet for a list item: number, task checkbox, decision mark or dash. */
 function listBullet(node: AdfNode, item: AdfNode, index: number): string {
   switch (node.type) {
     case "orderedList":
@@ -201,6 +210,7 @@ function listBullet(node: AdfNode, item: AdfNode, index: number): string {
   }
 }
 
+/** Renders a bullet, ordered, task or decision list, nesting by depth. */
 function renderList(node: AdfNode, options: AdfOptions, depth: number): string {
   const indent = "  ".repeat(depth);
   let index = Number(node.attrs?.order ?? 1);
@@ -227,6 +237,7 @@ function renderList(node: AdfNode, options: AdfOptions, depth: number): string {
     .join("\n");
 }
 
+/** Renders an ADF table as a Markdown table, using the first row as the header. */
 function renderTable(node: AdfNode, options: AdfOptions): string {
   const rows = (node.content ?? []).map((row) =>
     (row.content ?? []).map((cell) => renderChildren(cell, options, 0, " ").replace(/\n+/g, " ").replace(/\|/g, "\\|"))
@@ -247,6 +258,7 @@ function indentTail(text: string, prefix: string): string {
   return text.replace(/\n/g, `\n${prefix}`);
 }
 
+/** Adds a prefix to every line of the text. */
 function prefixLines(text: string, prefix: string): string {
   return text
     .split("\n")
@@ -254,6 +266,7 @@ function prefixLines(text: string, prefix: string): string {
     .join("\n");
 }
 
+/** Whether the text starts like pasted JSON or XML. */
 function looksLikePayload(text: string): boolean {
   const trimmed = text.trim();
   return /^[[{]/.test(trimmed) || /^<[?a-zA-Z]/.test(trimmed);

@@ -26,6 +26,7 @@ type ConfigTarget = {
   gitIgnorable: boolean;
 };
 
+/** Client config files the entry can be written to, relative to the working directory. */
 function targets(cwd: string): ConfigTarget[] {
   return [
     {
@@ -63,11 +64,13 @@ function targets(cwd: string): ConfigTarget[] {
   ];
 }
 
+/** Adds https:// when missing and strips trailing slashes. */
 function normalizeBaseUrl(value: string): string {
   const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
   return withScheme.replace(/\/+$/, "");
 }
 
+/** Basic auth header value for an Atlassian email and API token. */
 function authHeader(email: string, apiToken: string): string {
   return `Basic ${Buffer.from(`${email}:${apiToken}`).toString("base64")}`;
 }
@@ -84,6 +87,7 @@ async function jiraGet<T>(baseUrl: string, email: string, apiToken: string, endp
   return (await response.json()) as T;
 }
 
+/** Reads a JSON config file; a missing file counts as empty, an invalid one is an error. */
 async function readJson(file: string): Promise<Record<string, any>> {
   try {
     const raw = await readFile(file, "utf8");
@@ -98,6 +102,7 @@ async function readJson(file: string): Promise<Record<string, any>> {
   }
 }
 
+/** Returns the nested object at the key path, creating missing levels. */
 function getIn(root: Record<string, any>, keys: string[]): Record<string, any> {
   let node = root;
 
@@ -112,6 +117,7 @@ function getIn(root: Record<string, any>, keys: string[]): Record<string, any> {
   return node;
 }
 
+/** Whether the file is accessible. */
 async function exists(file: string): Promise<boolean> {
   try {
     await access(file);
@@ -133,6 +139,7 @@ async function findLocalCheckout(): Promise<string | undefined> {
   return undefined;
 }
 
+/** Appends the entry to .gitignore unless already listed; returns whether it was added. */
 async function ensureGitIgnored(cwd: string, entry: string) {
   const file = path.join(cwd, ".gitignore");
   let content = "";
@@ -154,6 +161,7 @@ async function ensureGitIgnored(cwd: string, entry: string) {
   return true;
 }
 
+/** Asks for the default project key, listing the available keys as a hint. */
 async function pickDefaultProject(baseUrl: string, email: string, apiToken: string): Promise<string> {
   type ProjectPage = { values?: { key: string; name: string }[] };
 
@@ -178,6 +186,7 @@ async function pickDefaultProject(baseUrl: string, email: string, apiToken: stri
   return value.toUpperCase();
 }
 
+/** Asks for field names and resolves them to JIRA_CUSTOM_FIELDS id:alias pairs. */
 async function pickCustomFields(baseUrl: string, email: string, apiToken: string): Promise<string> {
   const wanted = await ask("Custom fields to expose, by display name, comma separated (optional)", {
     defaultValue: ""
@@ -226,6 +235,7 @@ async function pickCustomFields(baseUrl: string, email: string, apiToken: string
   return mappings.join(",");
 }
 
+/** Collects the Jira connection details and builds the MCP server entry. */
 async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; suggestedName: string }> {
   const baseUrl = normalizeBaseUrl(
     await ask("Jira base URL", {
@@ -330,6 +340,7 @@ async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; sug
   return { entry, suggestedName: defaultProject ? `jira_${defaultProject.toLowerCase()}` : "jira" };
 }
 
+/** Configures one Jira instance; returns whether the user wants to add another. */
 async function addOne(cwd: string, printOnly: boolean): Promise<boolean> {
   const { entry, suggestedName } = await buildEntry(printOnly);
 
@@ -387,6 +398,7 @@ async function addOne(cwd: string, printOnly: boolean): Promise<boolean> {
   return await confirm("Add another Jira instance?", false);
 }
 
+/** Entry point of the setup wizard (--print only outputs the JSON). */
 async function main() {
   const major = Number(process.versions.node.split(".")[0]);
 

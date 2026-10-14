@@ -19,6 +19,7 @@ export type CommentView = {
 
 const DATE_LENGTH = 16; // "2026-09-18T11:12"
 
+/** Display name of a Jira user with the email when it is available. */
 function userName(user: any): string {
   if (!user) {
     return "—";
@@ -27,6 +28,7 @@ function userName(user: any): string {
   return user.emailAddress ? `${user.displayName} <${user.emailAddress}>` : (user.displayName ?? "—");
 }
 
+/** Comma-separated names of a list of Jira objects (components, versions). */
 function names(values: unknown): string {
   return Array.isArray(values)
     ? values
@@ -36,12 +38,14 @@ function names(values: unknown): string {
     : "";
 }
 
+/** Makes a value safe for a Markdown table cell (no pipes or line breaks). */
 function cell(value: unknown): string {
   const text =
     typeof value === "string" || typeof value === "number" ? String(value) : value == null ? "" : JSON.stringify(value);
   return text.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
 }
 
+/** Shortens an ISO timestamp to "YYYY-MM-DD HH:MM". */
 function shortDate(value: unknown): string {
   return typeof value === "string" ? value.slice(0, DATE_LENGTH).replace("T", " ") : "—";
 }
@@ -71,6 +75,7 @@ function fieldValue(value: any, options: AdfOptions = {}): string {
   return String(value);
 }
 
+/** Renders an issue as Markdown: metadata, links, subtasks, description and custom fields. */
 export function formatIssue(issue: any, customFields: CustomFieldMapping[]): string {
   const fields = issue?.fields ?? {};
   const lines: string[] = [`# ${issue.key}: ${fields.summary ?? ""}`, ""];
@@ -134,6 +139,7 @@ export function formatIssue(issue: any, customFields: CustomFieldMapping[]): str
   return lines.join("\n");
 }
 
+/** Formats a byte count as a human-readable size. */
 function fileSize(bytes: unknown): string {
   const size = Number(bytes);
   if (!Number.isFinite(size)) {
@@ -183,6 +189,7 @@ export function formatAttachments(attachments: any[], issueKey: string): string 
   ].join("\n");
 }
 
+/** Cuts text to maxLength and points at full:true for the rest. */
 function truncate(text: string, maxLength: number, commentId: string): string {
   if (text.length <= maxLength) {
     return text;
@@ -191,6 +198,7 @@ function truncate(text: string, maxLength: number, commentId: string): string {
   return `${text.slice(0, maxLength)}\n… [truncated ${text.length - maxLength} chars; full:true, commentId:${commentId}]`;
 }
 
+/** Renders one comment with its author, date and (possibly truncated) body. */
 export function formatComment(comment: any, view: Pick<CommentView, "maxLength" | "full">): string {
   const id = String(comment.id);
   const body = adfToMarkdown(comment.body, { full: view.full, commentId: id });
@@ -201,6 +209,7 @@ export function formatComment(comment: any, view: Pick<CommentView, "maxLength" 
   return `${header}\n${view.full ? body : truncate(body, view.maxLength, id)}`;
 }
 
+/** Renders a list of comments under a header with the shown and total count. */
 export function formatComments(comments: any[], view: CommentView): string {
   const orderLabel = view.order === "desc" ? "newest first" : "oldest first";
   const sinceLabel = view.since ? `, since ${view.since}` : "";
@@ -213,6 +222,7 @@ export function formatComments(comments: any[], view: CommentView): string {
   return [header, ...comments.map((comment) => formatComment(comment, view))].join("\n\n");
 }
 
+/** Renders a Jira search result as a table, with nextPageToken when more pages exist. */
 export function formatSearch(result: any): string {
   const issues: any[] = result?.issues ?? [];
   const total = result?.total !== undefined ? ` of ${result.total}` : "";

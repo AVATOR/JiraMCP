@@ -2,6 +2,7 @@ import readline from "node:readline";
 
 const isTTY = process.stdin.isTTY === true;
 
+/** Writes to stdout, which is free to use in the setup wizard (it is not the MCP channel). */
 function write(text: string) {
   process.stdout.write(text);
 }
@@ -23,10 +24,12 @@ type AskOptions = {
   validate?: (value: string) => string | undefined;
 };
 
+/** Creates a readline interface on stdin/stdout. */
 function createInterface(): readline.Interface {
   return readline.createInterface({ input: process.stdin, output: process.stdout, terminal: isTTY });
 }
 
+/** Asks one question; with secret the typed characters are not echoed. */
 function question(rl: readline.Interface, query: string, secret: boolean): Promise<string> {
   return new Promise((resolve) => {
     if (!secret) {
@@ -56,6 +59,7 @@ function question(rl: readline.Interface, query: string, secret: boolean): Promi
   });
 }
 
+/** Prompts until the answer passes validation; fails when there is no TTY. */
 export async function ask(label: string, options: AskOptions = {}): Promise<string> {
   if (!isTTY) {
     throw new Error("Interactive setup needs a TTY. Run `npx jira-mcp-add` from a terminal.");
@@ -82,6 +86,7 @@ export async function ask(label: string, options: AskOptions = {}): Promise<stri
   }
 }
 
+/** Asks a yes/no question and returns the answer as a boolean. */
 export async function confirm(label: string, defaultValue = true): Promise<boolean> {
   const answer = await ask(`${label} ${styles.dim(defaultValue ? "(Y/n)" : "(y/N)")}`, {
     defaultValue: defaultValue ? "y" : "n",
@@ -91,6 +96,7 @@ export async function confirm(label: string, defaultValue = true): Promise<boole
   return /^(y|yes)$/i.test(answer);
 }
 
+/** Shows a numbered list and returns the value of the chosen entry. */
 export async function select(label: string, choices: { value: string; hint?: string }[]): Promise<string> {
   write(`${styles.cyan("?")} ${label}\n`);
   choices.forEach((choice, index) => {
