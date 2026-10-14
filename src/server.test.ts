@@ -76,11 +76,14 @@ test("lists every tool with an input schema", async () => {
     "jira_get_issue",
     "jira_get_project_issues",
     "jira_list_attachments",
+    "jira_list_fields",
     "jira_search_issues"
   ]);
 
   for (const tool of tools) {
     assert.equal(tool.inputSchema.type, "object", tool.name);
+    assert.equal(tool.annotations?.readOnlyHint, true, tool.name);
+    assert.equal(tool.annotations?.openWorldHint, true, tool.name);
   }
 });
 
@@ -378,17 +381,75 @@ test("confluence_get_page converts storage format to Markdown", async () => {
   assert.equal(calls[0].url.searchParams.get("body-format"), "storage");
 });
 
-test("confluence_search_pages builds a CQL title query", async () => {
+test("confluence_search_pages builds a full-text CQL query", async () => {
   const { client, calls } = await connect({
     "/wiki/rest/api/search": () => json({ totalSize: 0, results: [] })
   });
 
   const { text } = await call(client, "confluence_search_pages", { query: 'release "notes"' });
 
-  assert.equal(text, "0 of 0 pages");
+  assert.match(text, /^0 of 0 pages/);
   const params = calls[0].url.searchParams;
-  assert.equal(params.get("cql"), 'type = page AND title ~ "release \\"notes\\"" ORDER BY lastmodified DESC');
+  assert.equal(params.get("cql"), 'type = page AND text ~ "release \\"notes\\"" ORDER BY lastmodified DESC');
   assert.equal(params.get("limit"), "25");
+});
+
+test("confluence_search_pages can restrict to a space and to titles", async () => {
+  const { client, calls } = await connect({
+    "/wiki/rest/api/search": () => json({ totalSize: 0, results: [] })
+  });
+
+  await call(client, "confluence_search_pages", { query: "plan", spaceKey: "MS", titleOnly: true });
+
+  assert.equal(
+    calls[0].url.searchParams.get("cql"),
+    'type = page AND title ~ "plan" AND space = "MS" ORDER BY lastmodified DESC'
+  );
+});
+
+test("Markdown results flag Jira/Confluence content as untrusted, raw JSON stays parseable", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1": () => json({ key: "ABC-1", fields: { summary: "Hello" } })
+  });
+
+  const markdown = await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+  assert.match(markdown.text, /untrusted data/);
+
+  const raw = await call(client, "jira_get_issue", { issueKey: "ABC-1", raw: true });
+  assert.equal(JSON.parse(raw.text).key, "ABC-1");
+});
+
+test("jira_search_issues and jira_get_project_issues support raw", async () => {
+  const { client } = await connect({
+    "/rest/api/3/search/jql": () => json({ issues: [{ key: "ABC-1", fields: {} }] })
+  });
+
+  for (const [name, args] of [
+    ["jira_search_issues", { jql: "project = ABC" }],
+    ["jira_get_project_issues", { projectKey: "ABC" }]
+  ] as const) {
+    const { text } = await call(client, name, { ...args, raw: true });
+    assert.equal(JSON.parse(text).issues[0].key, "ABC-1", name);
+  }
+});
+
+test("jira_list_fields filters by name and custom flag", async () => {
+  const { client } = await connect({
+    "/rest/api/3/field": () =>
+      json([
+        { id: "summary", name: "Summary", custom: false, schema: { type: "string" } },
+        { id: "customfield_10145", name: "Requirements", custom: true, schema: { type: "string" } },
+        { id: "customfield_10170", name: "Discovery questions", custom: true, schema: { type: "string" } }
+      ])
+  });
+
+  const byName = await call(client, "jira_list_fields", { query: "REQUIRE" });
+  assert.match(byName.text, /^1 fields/);
+  assert.match(byName.text, /\| customfield_10145 \| Requirements \| string \| yes \|/);
+
+  const custom = await call(client, "jira_list_fields", { customOnly: true });
+  assert.match(custom.text, /^2 fields/);
+  assert.doesNotMatch(custom.text, /Summary/);
 });
 
 test("confluence_get_space_pages resolves the space key to its id", async () => {
