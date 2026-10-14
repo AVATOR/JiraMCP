@@ -178,7 +178,7 @@ npm run setup    # run the setup wizard from source
 
 - The server uses Jira/Confluence REST API GET endpoints (plus one read-only POST,
   `search/approximate-count`, behind an allowlist); every request goes through
-  a single GET-only client (30 s timeout, retries on HTTP 429/503 honouring `Retry-After`).
+  a single HTTP client (30 s timeout, retries on HTTP 429/502/503/504 honouring `Retry-After`).
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
 - Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
   server instructions tell the client not to follow instructions found in it.
