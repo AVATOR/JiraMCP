@@ -16,7 +16,12 @@ dotenv.config({
   quiet: true
 });
 
-/** Reads a required environment variable or fails with its name. */
+/**
+ * Reads a required environment variable or fails with its name.
+ *
+ * @param name Environment variable name.
+ * @returns The trimmed value; throws when it is missing or blank.
+ */
 function getRequiredEnv(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) {

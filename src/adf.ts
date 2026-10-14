@@ -22,12 +22,23 @@ type AdfNode = {
 const DEFAULT_MAX_BLOCK_CHARS = 500;
 const DEFAULT_PREVIEW_CHARS = 300;
 
-/** Whether the value is an Atlassian Document Format document (root node of type "doc"). */
+/**
+ * Whether the value is an Atlassian Document Format document (root node of type "doc").
+ *
+ * @param value Value to check.
+ * @returns True when the value is an ADF document (type guard).
+ */
 export function isAdf(value: unknown): value is AdfNode {
   return !!value && typeof value === "object" && (value as AdfNode).type === "doc";
 }
 
-/** Converts an ADF document to Markdown; plain strings pass through and empty values give "". */
+/**
+ * Converts an ADF document to Markdown; plain strings pass through and empty values give "".
+ *
+ * @param node ADF document or fragment, a plain string, or null.
+ * @param options Limits for collapsing large payloads.
+ * @returns Trimmed Markdown; empty string for null or undefined.
+ */
 export function adfToMarkdown(node: unknown, options: AdfOptions = {}): string {
   if (node === null || node === undefined) {
     return "";
@@ -42,7 +53,15 @@ export function adfToMarkdown(node: unknown, options: AdfOptions = {}): string {
     .trim();
 }
 
-/** Renders the child blocks of a node and joins the non-empty results. */
+/**
+ * Renders the child blocks of a node and joins the non-empty results.
+ *
+ * @param node Parent node.
+ * @param options Rendering options.
+ * @param depth List nesting depth.
+ * @param separator String placed between rendered children.
+ * @returns Non-empty rendered children joined with the separator.
+ */
 function renderChildren(node: AdfNode, options: AdfOptions, depth: number, separator = "\n\n"): string {
   return (node.content ?? [])
     .map((child) => renderBlock(child, options, depth))
@@ -50,12 +69,22 @@ function renderChildren(node: AdfNode, options: AdfOptions, depth: number, separ
     .join(separator);
 }
 
-/** Renders a run of inline nodes (text, mentions, emoji) into one string. */
+/**
+ * Renders a run of inline nodes (text, mentions, emoji) into one string.
+ *
+ * @param nodes Inline nodes, may be undefined.
+ * @returns Concatenated inline Markdown.
+ */
 function renderInline(nodes: AdfNode[] | undefined): string {
   return (nodes ?? []).map(renderInlineNode).join("");
 }
 
-/** Renders a single inline node. */
+/**
+ * Renders a single inline node.
+ *
+ * @param node Inline node.
+ * @returns Markdown for the node.
+ */
 function renderInlineNode(node: AdfNode): string {
   switch (node.type) {
     case "text":
@@ -82,8 +111,12 @@ function renderInlineNode(node: AdfNode): string {
   }
 }
 
-// Media nodes carry the media-service id, not the Jira attachment id, so the label
-// points at jira_list_attachments / jira_download_attachment instead of the raw id.
+/**
+ * Media nodes carry the media-service id, not the Jira attachment id, so the label points at jira_list_attachments / jira_download_attachment instead of the raw id.
+ *
+ * @param node Media or media wrapper node.
+ * @returns Placeholder pointing at the attachment tools, or the inline content.
+ */
 function mediaLabel(node: AdfNode): string {
   if (node.type !== "media" && node.type !== "mediaInline") {
     return renderInline(node.content);
@@ -93,7 +126,13 @@ function mediaLabel(node: AdfNode): string {
   return `[attachment${name ? `: ${name}` : ""} — use jira_list_attachments / jira_download_attachment]`;
 }
 
-/** Wraps text in Markdown for ADF marks (bold, italic, code, strike, link). */
+/**
+ * Wraps text in Markdown for ADF marks (bold, italic, code, strike, link).
+ *
+ * @param text Text to decorate.
+ * @param marks ADF marks applied to the text.
+ * @returns Text wrapped in the matching Markdown syntax.
+ */
 function applyMarks(text: string, marks: AdfNode["marks"]): string {
   let result = text;
 
@@ -122,7 +161,14 @@ function applyMarks(text: string, marks: AdfNode["marks"]): string {
   return result;
 }
 
-/** Renders a block node; unknown node types fall back to their text content. */
+/**
+ * Renders a block node; unknown node types fall back to their text content.
+ *
+ * @param node ADF node.
+ * @param options Rendering options.
+ * @param depth List nesting depth.
+ * @returns Markdown for the block.
+ */
 function renderBlock(node: AdfNode, options: AdfOptions, depth: number): string {
   switch (node.type) {
     case "doc":
@@ -189,14 +235,26 @@ const INLINE_TYPES = new Set([
   "placeholder"
 ]);
 
-/** Whether the node holds inline content instead of nested blocks. */
+/**
+ * Whether the node holds inline content instead of nested blocks.
+ *
+ * @param node ADF node.
+ * @returns True for inline node types.
+ */
 function isInline(node: AdfNode): boolean {
   return INLINE_TYPES.has(node.type ?? "");
 }
 
 const NESTED_LIST_TYPES = new Set(["bulletList", "orderedList", "taskList", "decisionList"]);
 
-/** Returns the bullet for a list item: number, task checkbox, decision mark or dash. */
+/**
+ * Returns the bullet for a list item: number, task checkbox, decision mark or dash.
+ *
+ * @param node The list node.
+ * @param item The list item.
+ * @param index Item number, used by ordered lists.
+ * @returns Bullet or number prefix, e.g. "-", "3." or "- [x]".
+ */
 function listBullet(node: AdfNode, item: AdfNode, index: number): string {
   switch (node.type) {
     case "orderedList":
@@ -210,7 +268,14 @@ function listBullet(node: AdfNode, item: AdfNode, index: number): string {
   }
 }
 
-/** Renders a bullet, ordered, task or decision list, nesting by depth. */
+/**
+ * Renders a bullet, ordered, task or decision list, nesting by depth.
+ *
+ * @param node List node.
+ * @param options Rendering options.
+ * @param depth Nesting depth, two spaces of indent per level.
+ * @returns Markdown list.
+ */
 function renderList(node: AdfNode, options: AdfOptions, depth: number): string {
   const indent = "  ".repeat(depth);
   let index = Number(node.attrs?.order ?? 1);
@@ -237,7 +302,13 @@ function renderList(node: AdfNode, options: AdfOptions, depth: number): string {
     .join("\n");
 }
 
-/** Renders an ADF table as a Markdown table, using the first row as the header. */
+/**
+ * Renders an ADF table as a Markdown table, using the first row as the header.
+ *
+ * @param node Table node.
+ * @param options Rendering options.
+ * @returns Markdown table, empty string when there are no rows.
+ */
 function renderTable(node: AdfNode, options: AdfOptions): string {
   const rows = (node.content ?? []).map((row) =>
     (row.content ?? []).map((cell) => renderChildren(cell, options, 0, " ").replace(/\n+/g, " ").replace(/\|/g, "\\|"))
@@ -253,12 +324,24 @@ function renderTable(node: AdfNode, options: AdfOptions): string {
   return [line(rows[0]), line(Array(width).fill("---")), ...rows.slice(1).map(line)].join("\n");
 }
 
-// Indents every line but the first, which follows the bullet or the caller's own indent.
+/**
+ * Indents every line but the first, which follows the bullet or the caller's own indent.
+ *
+ * @param text Multi-line text.
+ * @param prefix Indent added after each line break.
+ * @returns Text with the continuation lines indented.
+ */
 function indentTail(text: string, prefix: string): string {
   return text.replace(/\n/g, `\n${prefix}`);
 }
 
-/** Adds a prefix to every line of the text. */
+/**
+ * Adds a prefix to every line of the text.
+ *
+ * @param text Multi-line text.
+ * @param prefix String put in front of each line.
+ * @returns Text with every line prefixed.
+ */
 function prefixLines(text: string, prefix: string): string {
   return text
     .split("\n")
@@ -266,13 +349,25 @@ function prefixLines(text: string, prefix: string): string {
     .join("\n");
 }
 
-/** Whether the text starts like pasted JSON or XML. */
+/**
+ * Whether the text starts like pasted JSON or XML.
+ *
+ * @param text Text to inspect.
+ * @returns True when the trimmed text starts with a JSON bracket or an XML tag.
+ */
 function looksLikePayload(text: string): boolean {
   const trimmed = text.trim();
   return /^[[{]/.test(trimmed) || /^<[?a-zA-Z]/.test(trimmed);
 }
 
-// Pasted request/response payloads dominate comment size; keep a preview only.
+/**
+ * Pasted request/response payloads dominate comment size; keep a preview only.
+ *
+ * @param text Block text.
+ * @param options Size limits and the full flag.
+ * @param isCode Collapse any long text, not only JSON/XML-looking ones.
+ * @returns The original text, or a short preview with the omitted size.
+ */
 function collapseIfPayload(text: string, options: AdfOptions, isCode = false): string {
   const maxChars = options.maxBlockChars ?? DEFAULT_MAX_BLOCK_CHARS;
 

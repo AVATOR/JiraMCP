@@ -52,7 +52,12 @@ const ENTITIES: Record<string, string> = {
   euro: "€"
 };
 
-/** Decodes named and numeric HTML entities; unknown ones are left as they are. */
+/**
+ * Decodes named and numeric HTML entities; unknown ones are left as they are.
+ *
+ * @param text Text that may contain HTML entities.
+ * @returns Text with entities replaced by characters.
+ */
 function decodeEntities(text: string): string {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
     if (entity[0] === "#") {
@@ -68,7 +73,12 @@ const TOKEN =
   /<!\[CDATA\[([\s\S]*?)\]\]>|<!--[\s\S]*?-->|<\/([\w:-]+)\s*>|<([\w:-]+)((?:\s+[\w:-]+(?:\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>"']+))?)*)\s*(\/?)>|([^<]+)|</g;
 const ATTR = /([\w:-]+)(?:\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>"']+)))?/g;
 
-// Tolerant parser: storage is meant to be well-formed XML, but unmatched tags must not lose text.
+/**
+ * Tolerant parser: storage is meant to be well-formed XML, but unmatched tags must not lose text.
+ *
+ * @param source Confluence storage-format XML.
+ * @returns Root node of the parsed tree.
+ */
 function parse(source: string): StorageNode {
   const root: StorageNode = { tag: "#root", attrs: {}, children: [] };
   const stack: StorageNode[] = [root];
@@ -104,34 +114,68 @@ function parse(source: string): StorageNode {
   return root;
 }
 
-/** Returns the first direct child with the given tag. */
+/**
+ * Returns the first direct child with the given tag.
+ *
+ * @param node Parent node.
+ * @param tag Tag name to find.
+ * @returns First matching child, or undefined.
+ */
 function child(node: StorageNode, tag: string): StorageNode | undefined {
   return node.children.find((entry) => entry.tag === tag);
 }
 
-/** Returns the text of a macro parameter (ac:parameter) by name. */
+/**
+ * Returns the text of a macro parameter (ac:parameter) by name.
+ *
+ * @param node Macro node.
+ * @param name Parameter name.
+ * @returns Parameter text, or undefined.
+ */
 function macroParam(node: StorageNode, name: string): string | undefined {
   const param = node.children.find((entry) => entry.tag === "ac:parameter" && entry.attrs["ac:name"] === name);
   return param ? textContent(param) : undefined;
 }
 
-/** Concatenates the plain text of a node and all its descendants. */
+/**
+ * Concatenates the plain text of a node and all its descendants.
+ *
+ * @param node Any node.
+ * @returns Concatenated plain text.
+ */
 function textContent(node: StorageNode): string {
   return node.text ?? node.children.map(textContent).join("");
 }
 
-/** Renders all children of a node and concatenates them. */
+/**
+ * Renders all children of a node and concatenates them.
+ *
+ * @param node Parent node.
+ * @param depth List nesting depth.
+ * @returns Rendered children, concatenated.
+ */
 function renderChildren(node: StorageNode, depth: number): string {
   return node.children.map((entry) => render(entry, depth)).join("");
 }
 
-/** Wraps text as a paragraph-level block, or returns "" when it is blank. */
+/**
+ * Wraps text as a paragraph-level block, or returns "" when it is blank.
+ *
+ * @param text Text to wrap.
+ * @returns Text surrounded by blank lines, or an empty string.
+ */
 function block(text: string): string {
   const trimmed = text.trim();
   return trimmed ? `\n\n${trimmed}\n\n` : "";
 }
 
-/** Wraps text in an inline marker such as ** or _, keeping edge whitespace outside it. */
+/**
+ * Wraps text in an inline marker such as ** or _, keeping edge whitespace outside it.
+ *
+ * @param text Text to decorate.
+ * @param marker Markdown marker such as ** or *.
+ * @returns Text with the marker around its trimmed content.
+ */
 function wrap(text: string, marker: string): string {
   const trimmed = text.trim();
   if (!trimmed) {
@@ -144,7 +188,13 @@ function wrap(text: string, marker: string): string {
   return `${lead}${marker}${trimmed}${marker}${trail}`;
 }
 
-/** Adds a prefix to every line of the text. */
+/**
+ * Adds a prefix to every line of the text.
+ *
+ * @param text Multi-line text.
+ * @param prefix String put in front of each line.
+ * @returns Text with every line prefixed.
+ */
 function prefixLines(text: string, prefix: string): string {
   return text
     .split("\n")
@@ -152,7 +202,13 @@ function prefixLines(text: string, prefix: string): string {
     .join("\n");
 }
 
-/** Renders one storage node (element or text) as Markdown. */
+/**
+ * Renders one storage node (element or text) as Markdown.
+ *
+ * @param node Element or text node.
+ * @param depth List nesting depth.
+ * @returns Markdown for the node.
+ */
 function render(node: StorageNode, depth: number): string {
   if (node.text !== undefined) {
     return node.text.replace(/\s+/g, " ");
@@ -228,7 +284,13 @@ function render(node: StorageNode, depth: number): string {
   }
 }
 
-/** Renders an ac:structured-macro: code, panels, expand and others by name. */
+/**
+ * Renders an ac:structured-macro: code, panels, expand and others by name.
+ *
+ * @param node ac:structured-macro element.
+ * @param depth List nesting depth.
+ * @returns Markdown for the macro; empty for ones without useful content.
+ */
 function renderMacro(node: StorageNode, depth: number): string {
   const name = node.attrs["ac:name"] ?? "";
   const body = child(node, "ac:rich-text-body");
@@ -275,7 +337,12 @@ function renderMacro(node: StorageNode, depth: number): string {
   return `[macro: ${name}]`;
 }
 
-// Page images live in Confluence, not on a Jira issue, so they are only labelled.
+/**
+ * Page images live in Confluence, not on a Jira issue, so they are only labelled.
+ *
+ * @param node ac:image element.
+ * @returns Placeholder such as "[image: name — caption]".
+ */
 function renderImage(node: StorageNode): string {
   const attachment = child(node, "ri:attachment");
   const url = child(node, "ri:url");
@@ -285,7 +352,12 @@ function renderImage(node: StorageNode): string {
   return `[image${source ? `: ${source}` : ""}${captionText ? ` — ${captionText}` : ""}]`;
 }
 
-/** Renders an ac:link to a page, attachment, user or anchor as its label. */
+/**
+ * Renders an ac:link to a page, attachment, user or anchor as its label.
+ *
+ * @param node ac:link element.
+ * @returns The link label, or a bracketed placeholder.
+ */
 function renderLink(node: StorageNode): string {
   const body = child(node, "ac:link-body") ?? child(node, "ac:plain-text-link-body");
   const label = body ? textContent(body).trim() : "";
@@ -308,7 +380,13 @@ function renderLink(node: StorageNode): string {
   return label || (node.attrs["ac:anchor"] ? `#${node.attrs["ac:anchor"]}` : "");
 }
 
-/** Renders ul, ol and task lists, nesting by depth. */
+/**
+ * Renders ul, ol and task lists, nesting by depth.
+ *
+ * @param node ul, ol or task-list element.
+ * @param depth Nesting depth.
+ * @returns Markdown list.
+ */
 function renderList(node: StorageNode, depth: number): string {
   const indent = "  ".repeat(depth);
   const items = node.children.filter((entry) => entry.tag === "li" || entry.tag === "ac:task");
@@ -359,7 +437,12 @@ function renderList(node: StorageNode, depth: number): string {
     .join("\n");
 }
 
-/** Renders a storage table as a Markdown table, using the first row as the header. */
+/**
+ * Renders a storage table as a Markdown table, using the first row as the header.
+ *
+ * @param node table element.
+ * @returns Markdown table, empty string when there are no rows.
+ */
 function renderTable(node: StorageNode): string {
   const rows: string[][] = [];
 
@@ -390,7 +473,12 @@ function renderTable(node: StorageNode): string {
   return [line(rows[0]), line(Array(width).fill("---")), ...rows.slice(1).map(line)].join("\n");
 }
 
-/** Converts Confluence storage format (XHTML with ac:/ri: tags) to Markdown. */
+/**
+ * Converts Confluence storage format (XHTML with ac:/ri: tags) to Markdown.
+ *
+ * @param source Confluence storage-format body.
+ * @returns Trimmed Markdown.
+ */
 export function storageToMarkdown(source: string): string {
   return render(parse(source), 0)
     .replace(/[ \t]+\n/g, "\n")
