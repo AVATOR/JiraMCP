@@ -259,7 +259,12 @@ export function formatSearch(
   customFields: CustomFieldMapping[] = []
 ): string {
   const issues = result?.issues ?? [];
-  const total = result?.total !== undefined ? ` of ${result.total}` : "";
+  const total =
+    result?.total !== undefined
+      ? ` of ${result.total}`
+      : result?.approximateTotal !== undefined
+        ? ` of ~${result.approximateTotal}`
+        : "";
   const more = result?.nextPageToken && result?.isLast !== true;
   const rows = issues.map((issue) => {
     const f = issue.fields ?? {};

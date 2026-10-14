@@ -112,6 +112,28 @@ test("jira_search_issues passes JQL, page size and token through", async () => {
   assert.equal(params.get("nextPageToken"), "prev");
 });
 
+test("jira_search_issues includeTotal adds the approximate count via a read-only POST", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/search/jql": () => json({ issues: [{ key: "ABC-1", fields: { summary: "One" } }], isLast: true }),
+    "/rest/api/3/search/approximate-count": () => json({ count: 42 })
+  });
+
+  const without = await call(client, "jira_search_issues", { jql: "project = ABC" });
+  assert.match(without.text, /^1 issues/);
+  assert.ok(!calls.some((entry) => entry.url.pathname.endsWith("approximate-count")));
+
+  const { text, result } = await call(client, "jira_search_issues", { jql: "project = ABC", includeTotal: true });
+  assert.match(text, /^1 of ~42 issues/);
+
+  const countCall = calls.find((entry) => entry.url.pathname.endsWith("approximate-count"));
+  assert.deepEqual(JSON.parse(countCall?.init?.body as string), { jql: "project = ABC" });
+  assert.equal(countCall?.init?.method, "POST");
+  assert.equal(result.isError, undefined);
+
+  const raw = await call(client, "jira_search_issues", { jql: "project = ABC", includeTotal: true, raw: true });
+  assert.equal(JSON.parse(raw.text).approximateTotal, 42);
+});
+
 test("jira_get_project_issues quotes the project key and falls back to the default project", async () => {
   const routes = { "/rest/api/3/search/jql": () => json({ issues: [] }) };
 

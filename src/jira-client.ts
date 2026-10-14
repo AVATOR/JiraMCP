@@ -122,6 +122,17 @@ export class JiraClient {
   }
 
   /**
+   * Counts the issues matching a JQL query. Jira only offers an estimate, via a read-only POST.
+   *
+   * @param jql JQL query.
+   * @returns Approximate number of matching issues.
+   */
+  async countIssues(jql: string): Promise<number> {
+    const result = await this.http.postRead<{ count?: number }>("/rest/api/3/search/approximate-count", { jql });
+    return result?.count ?? 0;
+  }
+
+  /**
    * Lists a project's issues, most recently updated first.
    *
    * @param projectKey Project key.

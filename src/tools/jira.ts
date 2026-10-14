@@ -96,11 +96,20 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
             "Extra field ids to return in addition to the default columns (e.g. labels, description, " +
               "customfield_10145). Shown as extra table columns, clipped to 200 characters."
           ),
+        includeTotal: z
+          .boolean()
+          .optional()
+          .describe("Also return the approximate total number of matching issues (one extra request)."),
         raw: rawFlag
       }
     },
-    async ({ jql, maxResults, nextPageToken, fields, raw }) => {
+    async ({ jql, maxResults, nextPageToken, fields, includeTotal, raw }) => {
       const result = await client.searchIssues({ jql, maxResults, nextPageToken, fields });
+
+      if (includeTotal) {
+        result.approximateTotal = await client.countIssues(jql);
+      }
+
       return raw
         ? toTextResult(result, client.customFields)
         : toMarkdownResult(formatSearch(result, fields, client.customFields));

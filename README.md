@@ -176,7 +176,8 @@ npm run setup    # run the setup wizard from source
 
 ## Security model
 
-- The server uses Jira/Confluence REST API GET endpoints only; every request goes through
+- The server uses Jira/Confluence REST API GET endpoints (plus one read-only POST,
+  `search/approximate-count`, behind an allowlist); every request goes through
   a single GET-only client (30 s timeout, retries on HTTP 429/503 honouring `Retry-After`).
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
 - Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the

@@ -55,8 +55,12 @@ export function retryDelayMs(response: Response, attempt: number): number {
   return 1000 * 2 ** attempt;
 }
 
+// Endpoints that take a POST body but only read data (Jira cannot express them as a GET).
+const READ_ONLY_POST_PATHS = new Set(["/rest/api/3/search/approximate-count"]);
+
 /**
- * The single place that talks to Atlassian: GET only, with a timeout and retries on rate limiting.
+ * The single place that talks to Atlassian: GET only (plus the read-only POST endpoints listed
+ * above), with a timeout and retries on rate limiting.
  */
 export class AtlassianHttp {
   readonly baseUrl: string;
@@ -78,13 +82,27 @@ export class AtlassianHttp {
    * @returns The response, after retrying on 429/502/503/504.
    */
   async fetchWithRetry(url: URL, accept: string): Promise<Response> {
+    return this.send(url, accept);
+  }
+
+  /**
+   * Sends the request, retrying on rate limiting and gateway errors.
+   *
+   * @param url Request URL.
+   * @param accept Accept header value.
+   * @param body JSON body; when given the request is a POST, which callers may only do for allowlisted read endpoints.
+   * @returns The response, after retries.
+   */
+  private async send(url: URL, accept: string, body?: string): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetchImpl(url, {
-        method: "GET",
+        method: body === undefined ? "GET" : "POST",
         headers: {
           Accept: accept,
-          Authorization: this.authHeader
+          Authorization: this.authHeader,
+          ...(body === undefined ? {} : { "Content-Type": "application/json" })
         },
+        body,
         redirect: "follow",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
       });
@@ -115,8 +133,33 @@ export class AtlassianHttp {
       }
     }
 
-    const response = await this.fetchWithRetry(url, "application/json");
+    return this.parse<T>(await this.fetchWithRetry(url, "application/json"), path);
+  }
 
+  /**
+   * POSTs a JSON body to one of the allowlisted read-only endpoints (e.g. approximate-count).
+   *
+   * @param path API path; must be in the read-only POST allowlist.
+   * @param body JSON-serializable request body.
+   * @returns Parsed JSON, or text for non-JSON responses.
+   */
+  async postRead<T = JsonValue>(path: string, body: unknown): Promise<T> {
+    if (!READ_ONLY_POST_PATHS.has(path)) {
+      throw new Error(`POST is not allowed for ${path}`);
+    }
+
+    const response = await this.send(new URL(`${this.baseUrl}${path}`), "application/json", JSON.stringify(body));
+    return this.parse<T>(response, path);
+  }
+
+  /**
+   * Turns a response into parsed JSON (or text), throwing on non-2xx statuses.
+   *
+   * @param response Response to read.
+   * @param path API path, used in the error message.
+   * @returns Parsed JSON, or text for non-JSON responses.
+   */
+  private async parse<T>(response: Response, path: string): Promise<T> {
     if (!response.ok) {
       // Error pages can be full HTML documents; keep only the start of them.
       const text = await response.text();
