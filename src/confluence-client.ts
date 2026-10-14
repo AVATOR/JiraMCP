@@ -9,6 +9,9 @@ import type {
   ConfluenceSpacePages
 } from "./types.js";
 
+/**
+ * Confluence REST client. Only issues GET requests, so it cannot modify anything.
+ */
 export class ConfluenceClient {
   constructor(
     private readonly http: AtlassianHttp,
@@ -19,13 +22,24 @@ export class ConfluenceClient {
     return `${this.http.baseUrl}/wiki`;
   }
 
+  /**
+   * Fetches a Confluence page with its body in storage format.
+   *
+   * @param pageId Page id.
+   * @returns Raw page with a storage-format body.
+   */
   async getPage(pageId: string): Promise<ConfluencePage> {
     return this.http.get<ConfluencePage>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
       "body-format": "storage"
     });
   }
 
-  // The v2 pages endpoint only filters by exact title, so fuzzy and full-text search go through v1 CQL.
+  /**
+   * The v2 pages endpoint only filters by exact title, so fuzzy and full-text search go through v1 CQL.
+   *
+   * @param params Query text, limit and optional space and title-only restriction.
+   * @returns Raw v1 search response.
+   */
   async searchPages(params: {
     query: string;
     limit: number;
@@ -44,6 +58,11 @@ export class ConfluenceClient {
     });
   }
 
+  /**
+   * Lists every visible Confluence space, following cursors; cached.
+   *
+   * @returns All spaces.
+   */
   async getSpaces(): Promise<ConfluenceSpace[]> {
     return this.cache.get("confluence-spaces", async () => {
       const spaces: ConfluenceSpace[] = [];
@@ -72,7 +91,14 @@ export class ConfluenceClient {
     });
   }
 
-  // v2 lists pages by numeric space id, not by key, so the key is resolved first.
+  /**
+   * v2 lists pages by numeric space id, not by key, so the key is resolved first.
+   *
+   * @param spaceKey Space key.
+   * @param limit Page size.
+   * @param cursor Cursor from the previous page.
+   * @returns Raw v2 pages response.
+   */
   async getSpacePages(spaceKey: string, limit: number, cursor?: string): Promise<ConfluenceSpacePages> {
     const spaces = await this.http.get<ConfluenceSpaceList>("/wiki/api/v2/spaces", { keys: spaceKey });
     const spaceId = spaces?.results?.[0]?.id;

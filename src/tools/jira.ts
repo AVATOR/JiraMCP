@@ -21,6 +21,12 @@ import {
   toTextResult
 } from "./shared.js";
 
+/**
+ * Registers the read-only Jira tools.
+ *
+ * @param server MCP server to add the tools to.
+ * @param client Jira client the tools read through.
+ */
 export function registerJiraTools(server: McpServer, client: JiraClient) {
   const customFieldsHint = client.customFields.length
     ? ` Returns these configured custom fields: ${client.customFields

@@ -9,10 +9,23 @@ import { READ_ONLY_ANNOTATIONS } from "./shared.js";
 // Bigger images blow up the context when base64-encoded, so they are only saved to disk.
 const MAX_INLINE_IMAGE_BYTES = 4 * 1024 * 1024;
 
+/**
+ * Makes an attachment name safe to use as a file name.
+ *
+ * @param name Original file name.
+ * @returns Name with unsafe characters replaced by _, at most 100 characters.
+ */
 export function sanitizeFileName(name: string): string {
   return name.replace(/[^\w.-]+/g, "_").slice(0, 100) || "attachment";
 }
 
+/**
+ * Registers jira_download_attachment.
+ *
+ * @param server MCP server to add the tool to.
+ * @param client Jira client used to fetch the file.
+ * @param downloadDir Default directory to save into.
+ */
 export function registerAttachmentTools(server: McpServer, client: JiraClient, downloadDir: string) {
   server.registerTool(
     "jira_download_attachment",

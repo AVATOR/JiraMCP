@@ -12,11 +12,23 @@ export type HttpConfig = {
   apiToken: string;
 };
 
+/**
+ * Resolves after the given number of milliseconds.
+ *
+ * @param ms Delay in milliseconds.
+ * @returns Promise that resolves after the delay.
+ */
 function sleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-// Retry-After is either seconds or an HTTP date; fall back to exponential backoff.
+/**
+ * Retry-After is either seconds or an HTTP date; fall back to exponential backoff.
+ *
+ * @param response The 429/503 response.
+ * @param attempt Zero-based retry number, used for exponential backoff.
+ * @returns Delay in milliseconds, at most 60 s.
+ */
 export function retryDelayMs(response: Response, attempt: number): number {
   const header = response.headers.get("retry-after");
   const seconds = header ? Number(header) : NaN;
@@ -33,7 +45,9 @@ export function retryDelayMs(response: Response, attempt: number): number {
   return 1000 * 2 ** attempt;
 }
 
-// The single place that talks to Atlassian: GET only, with a timeout and retries on rate limiting.
+/**
+ * The single place that talks to Atlassian: GET only, with a timeout and retries on rate limiting.
+ */
 export class AtlassianHttp {
   readonly baseUrl: string;
   private readonly authHeader: string;
@@ -46,6 +60,13 @@ export class AtlassianHttp {
     this.authHeader = Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
   }
 
+  /**
+   * Issues a GET, retrying on 429/503.
+   *
+   * @param url Request URL.
+   * @param accept Accept header value.
+   * @returns The response, after retrying on 429/503.
+   */
   async fetchWithRetry(url: URL, accept: string): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetchImpl(url, {
@@ -68,7 +89,13 @@ export class AtlassianHttp {
     }
   }
 
-  // The caller states the payload type it expects; the body is not validated at runtime.
+  /**
+   * GETs a JSON endpoint and returns the parsed body; non-2xx responses throw. The payload type is not validated at runtime.
+   *
+   * @param path API path starting with /.
+   * @param query Query parameters.
+   * @returns Parsed JSON, or text for non-JSON responses.
+   */
   async get<T = JsonValue>(path: string, query?: Record<string, string>): Promise<T> {
     const url = new URL(`${this.baseUrl}${path}`);
 

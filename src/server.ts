@@ -31,6 +31,13 @@ export type ServerDeps = {
   cacheTtlMs?: number;
 };
 
+/**
+ * Creates the MCP server with every read-only Jira and Confluence tool registered.
+ *
+ * @param config Jira connection settings.
+ * @param deps Test hooks: fetch, download directory and cache TTL.
+ * @returns MCP server with all tools registered, not yet connected.
+ */
 export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): McpServer {
   const http = new AtlassianHttp(config, deps.fetch);
   const cache = new ReferenceCache(deps.cacheTtlMs);

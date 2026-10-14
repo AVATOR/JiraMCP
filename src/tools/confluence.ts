@@ -9,6 +9,12 @@ import {
 import type { ConfluenceClient } from "../confluence-client.js";
 import { matchesQuery, rawFlag, READ_ONLY_ANNOTATIONS, toMarkdownResult, toTextResult } from "./shared.js";
 
+/**
+ * Registers the read-only Confluence tools.
+ *
+ * @param server MCP server to add the tools to.
+ * @param client Confluence client the tools read through.
+ */
 export function registerConfluenceTools(server: McpServer, client: ConfluenceClient) {
   server.registerTool(
     "confluence_get_page",
