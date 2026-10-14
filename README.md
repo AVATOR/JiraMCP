@@ -174,6 +174,13 @@ npm run setup    # run the setup wizard from source
 - `confluence_get_space_pages`
 - `confluence_list_spaces`
 
+## Structured output
+
+Every tool declares an `outputSchema` and returns `structuredContent` next to the Markdown text:
+the same compact fields the Markdown shows, as JSON, so clients can use the data without parsing
+tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
+`jira_search_issues` also accepts `includeTotal` for an approximate total.
+
 ## Security model
 
 - The server uses Jira/Confluence REST API GET endpoints (plus one read-only POST,

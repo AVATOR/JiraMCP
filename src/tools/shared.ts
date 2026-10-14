@@ -94,18 +94,20 @@ export function limitParam(max: number, fallback: number, noun: string) {
  * @param raw Value of the tool's `raw` argument.
  * @param data Payload returned as JSON when raw.
  * @param render Renders the Markdown form, called only when not raw.
- * @param options untrusted: append the untrusted-content note (default true); customFields: aliases added to raw issues.
+ * @param options structured: the tool's structuredContent; untrusted: append the untrusted-content note (default true); customFields: aliases added to raw issues.
  * @returns MCP tool result.
  */
 export function respond<T>(
   raw: boolean | undefined,
   data: T,
   render: (data: T) => string,
-  options: { untrusted?: boolean; customFields?: CustomFieldMapping[] } = {}
+  options: { untrusted?: boolean; customFields?: CustomFieldMapping[]; structured: Record<string, unknown> }
 ) {
-  return raw
+  const base = raw
     ? toTextResult(data, options.customFields)
     : toMarkdownResult(render(data), { untrusted: options.untrusted ?? true });
+  // The structured form is the compact data in both modes; `raw` only changes the text.
+  return { ...base, structuredContent: options.structured };
 }
 
 export const rawFlag = z.boolean().optional().describe("Return the unprocessed Jira JSON (debugging only; large).");

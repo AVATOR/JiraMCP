@@ -22,15 +22,43 @@ import {
 } from "../compact/index.js";
 import type { JiraClient } from "../jira-client.js";
 import {
-  limitParam,
-  matchesQuery,
-  nextPageTokenParam,
-  rawFlag,
-  READ_ONLY_ANNOTATIONS,
-  respond,
-  toMarkdownResult,
-  toTextResult
-} from "./shared.js";
+  attachmentsData,
+  attachmentsOutput,
+  boardsData,
+  boardsOutput,
+  changelogData,
+  changelogOutput,
+  commentsData,
+  commentsOutput,
+  currentUserData,
+  currentUserOutput,
+  fieldsData,
+  fieldsOutput,
+  filtersData,
+  filtersOutput,
+  issueData,
+  issueOutput,
+  metadataData,
+  metadataOutput,
+  projectData,
+  projectOutput,
+  projectsData,
+  projectsOutput,
+  remoteLinksData,
+  remoteLinksOutput,
+  runFilterOutput,
+  searchData,
+  searchOutput,
+  sprintsData,
+  sprintsOutput,
+  transitionsData,
+  transitionsOutput,
+  usersData,
+  usersOutput,
+  worklogsData,
+  worklogsOutput
+} from "../structured.js";
+import { limitParam, matchesQuery, nextPageTokenParam, rawFlag, READ_ONLY_ANNOTATIONS, respond } from "./shared.js";
 
 /**
  * Registers the read-only Jira tools.
@@ -67,15 +95,19 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get Jira issue",
       description: `Fetch a Jira issue by key in read-only mode.${customFieldsHint}`,
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: issueOutput,
       inputSchema: {
         issueKey: z.string().min(2),
         raw: rawFlag
       }
     },
-    async ({ issueKey, raw }) =>
-      raw
-        ? toTextResult(await client.getIssue(issueKey, true), client.customFields)
-        : toMarkdownResult(formatIssue(await client.getIssue(issueKey), client.customFields))
+    async ({ issueKey, raw }) => {
+      const issue = await client.getIssue(issueKey, raw);
+      return respond(raw, issue, (value) => formatIssue(value, client.customFields), {
+        customFields: client.customFields,
+        structured: issueData(issue, client.customFields)
+      });
+    }
   );
 
   server.registerTool(
@@ -84,6 +116,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Search Jira issues",
       description: "Run a JQL search against Jira in read-only mode.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: searchOutput,
       inputSchema: {
         jql: z.string().min(1),
         maxResults: z.number().int().min(1).max(100).optional(),
@@ -110,9 +143,10 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         result.approximateTotal = await client.countIssues(jql);
       }
 
-      return raw
-        ? toTextResult(result, client.customFields)
-        : toMarkdownResult(formatSearch(result, fields, client.customFields));
+      return respond(raw, result, (value) => formatSearch(value, fields, client.customFields), {
+        customFields: client.customFields,
+        structured: searchData(result, fields, client.customFields)
+      });
     }
   );
 
@@ -122,6 +156,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get Jira project issues",
       description: "List issues from a Jira project ordered by last update.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: searchOutput,
       inputSchema: {
         projectKey: z.string().min(1).optional(),
         maxResults: z.number().int().min(1).max(100).optional(),
@@ -131,7 +166,10 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ projectKey, maxResults, nextPageToken, raw }) => {
       const result = await client.getProjectIssues(resolveProject(projectKey), maxResults, nextPageToken);
-      return respond(raw, result, formatSearch, { customFields: client.customFields });
+      return respond(raw, result, formatSearch, {
+        customFields: client.customFields,
+        structured: searchData(result)
+      });
     }
   );
 
@@ -143,6 +181,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "Fetch comments for a Jira issue as Markdown. Defaults to the 5 newest; long comments are truncated and " +
         "pasted JSON/XML payloads collapsed — expand one with commentId + full:true.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: commentsOutput,
       inputSchema: {
         issueKey: z.string().min(2),
         limit: z.number().int().min(1).max(100).optional().describe("How many comments to return (default 5)."),
@@ -155,15 +194,15 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       }
     },
     async ({ issueKey, limit, order, since, maxLength, full, commentId, raw }) => {
-      if (raw) {
-        return toTextResult(
-          commentId ? await client.getComment(issueKey, commentId) : await client.getComments(issueKey)
-        );
-      }
-
       if (commentId) {
         const comment = await client.getComment(issueKey, commentId);
-        return toMarkdownResult(`${issueKey}\n\n${formatComment(comment, { maxLength: 0, full: true })}`);
+        const view = { issueKey, total: 1, order: "asc", maxLength: 0, full: true };
+        return respond(
+          raw,
+          comment,
+          (value) => `${issueKey}\n\n${formatComment(value, { maxLength: 0, full: true })}`,
+          { structured: commentsData([comment], view) }
+        );
       }
 
       const sinceDate = since ? new Date(since) : undefined;
@@ -172,22 +211,24 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       }
 
       const resolvedOrder = order ?? "desc";
+      const view = { issueKey, order: resolvedOrder, maxLength: maxLength ?? 2000, full: full ?? false };
+
+      if (raw) {
+        const page = await client.getComments(issueKey);
+        return respond(raw, page, () => "", {
+          structured: commentsData(page.comments ?? [], { ...view, total: page.total ?? 0 })
+        });
+      }
+
       const { comments, total } = await client.findComments(issueKey, {
         limit: limit ?? 5,
         order: resolvedOrder,
         since: sinceDate
       });
 
-      return toMarkdownResult(
-        formatComments(comments, {
-          issueKey,
-          total,
-          order: resolvedOrder,
-          since,
-          maxLength: maxLength ?? 2000,
-          full: full ?? false
-        })
-      );
+      return respond(raw, comments, (items) => formatComments(items, { ...view, total, since }), {
+        structured: commentsData(comments, { ...view, total })
+      });
     }
   );
 
@@ -199,6 +240,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "List every file attached to a Jira issue — both files on the description and images pasted into " +
         "comments — with the attachment ids needed by jira_download_attachment.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: attachmentsOutput,
       inputSchema: {
         issueKey: z.string().min(2),
         raw: rawFlag
@@ -206,7 +248,9 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ issueKey, raw }) => {
       const attachments = await client.getAttachments(issueKey);
-      return respond(raw, attachments, (items) => formatAttachments(items, issueKey));
+      return respond(raw, attachments, (items) => formatAttachments(items, issueKey), {
+        structured: attachmentsData(attachments)
+      });
     }
   );
 
@@ -218,6 +262,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "List Jira fields with their ids, to find customfield_* ids by name (e.g. for JIRA_CUSTOM_FIELDS or JQL). " +
         "Filter by name with query.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: fieldsOutput,
       inputSchema: {
         query: z.string().optional().describe("Case-insensitive text the field name or id must contain."),
         customOnly: z.boolean().optional().describe("Only custom fields (customfield_*)."),
@@ -228,7 +273,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       const fields = (await client.getFields()).filter(
         (field) => (!customOnly || field.custom === true) && matchesQuery(query, field.name, field.id)
       );
-      return respond(raw, fields, formatFields, { untrusted: false });
+      return respond(raw, fields, formatFields, { untrusted: false, structured: fieldsData(fields) });
     }
   );
 
@@ -240,6 +285,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "List the Jira projects the user can browse, with their keys (for JQL and JIRA_DEFAULT_PROJECT). " +
         "Filter by name or key with query.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: projectsOutput,
       inputSchema: {
         query: z.string().optional().describe("Case-insensitive text the project name or key must contain."),
         limit: limitParam(200, 50, "projects"),
@@ -249,7 +295,10 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     async ({ query, limit, raw }) => {
       const matches = (await client.getProjects()).filter((project) => matchesQuery(query, project.name, project.key));
       const shown = matches.slice(0, limit ?? 50);
-      return respond(raw, shown, (items) => formatProjects(items, matches.length), { untrusted: false });
+      return respond(raw, shown, (items) => formatProjects(items, matches.length), {
+        untrusted: false,
+        structured: projectsData(shown, matches.length)
+      });
     }
   );
 
@@ -259,11 +308,12 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get current Jira user",
       description: "Return the Jira user the server authenticates as (accountId, name, time zone).",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: currentUserOutput,
       inputSchema: { raw: rawFlag }
     },
     async ({ raw }) => {
       const user = await client.getCurrentUser();
-      return respond(raw, user, formatCurrentUser, { untrusted: false });
+      return respond(raw, user, formatCurrentUser, { untrusted: false, structured: currentUserData(user) });
     }
   );
 
@@ -274,6 +324,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       description:
         'Find Jira users by name or email to get the accountId needed in JQL (e.g. assignee = "<accountId>").',
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: usersOutput,
       inputSchema: {
         query: z.string().min(1).describe("Part of the display name or email address."),
         limit: limitParam(50, 10, "users"),
@@ -282,7 +333,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ query, limit, raw }) => {
       const users = await client.findUsers(query, limit ?? 10);
-      return respond(raw, users, formatUsers, { untrusted: false });
+      return respond(raw, users, formatUsers, { untrusted: false, structured: usersData(users) });
     }
   );
 
@@ -294,6 +345,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "Who changed what and when on an issue (status, assignee, fields), newest first. Filter to one " +
         "field such as status with field.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: changelogOutput,
       inputSchema: {
         issueKey: z.string().min(2),
         field: z.string().optional().describe("Only changes of this field name, e.g. status or assignee."),
@@ -311,7 +363,9 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         .filter((entry) => entry.items.length)
         .reverse();
       const shown = matching.slice(0, limit ?? 20);
-      return respond(raw, shown, (entries) => formatChangelog(entries, { issueKey, total: matching.length, field }));
+      return respond(raw, shown, (entries) => formatChangelog(entries, { issueKey, total: matching.length, field }), {
+        structured: changelogData(shown, issueKey, matching.length)
+      });
     }
   );
 
@@ -321,11 +375,14 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get Jira worklogs",
       description: "Time logged on an issue: who, when, how long, with the total.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: worklogsOutput,
       inputSchema: { issueKey: z.string().min(2), raw: rawFlag }
     },
     async ({ issueKey, raw }) => {
       const worklogs = await client.getWorklogs(issueKey);
-      return respond(raw, worklogs, (items) => formatWorklogs(items, issueKey));
+      return respond(raw, worklogs, (items) => formatWorklogs(items, issueKey), {
+        structured: worklogsData(worklogs, issueKey)
+      });
     }
   );
 
@@ -337,11 +394,15 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "Workflow transitions currently available for an issue (id, name, target status). Read only: " +
         "transitions cannot be executed with this server.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: transitionsOutput,
       inputSchema: { issueKey: z.string().min(2), raw: rawFlag }
     },
     async ({ issueKey, raw }) => {
       const transitions = await client.getTransitions(issueKey);
-      return respond(raw, transitions, (items) => formatTransitions(items, issueKey), { untrusted: false });
+      return respond(raw, transitions, (items) => formatTransitions(items, issueKey), {
+        untrusted: false,
+        structured: transitionsData(transitions, issueKey)
+      });
     }
   );
 
@@ -353,6 +414,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         "Reference lists for writing JQL: all statuses (with category), issue types or priorities. " +
         "Filter by name with query.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: metadataOutput,
       inputSchema: {
         kind: z.enum(["statuses", "issueTypes", "priorities"]).describe("Which list to return."),
         query: z.string().optional().describe("Case-insensitive text the name must contain."),
@@ -363,7 +425,10 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     async ({ kind, query, limit, raw }) => {
       const matches = (await client.getReference(kind)).filter((item) => matchesQuery(query, item.name));
       const shown = matches.slice(0, limit ?? 100);
-      return respond(raw, shown, (items) => formatReference(items, kind, matches.length), { untrusted: false });
+      return respond(raw, shown, (items) => formatReference(items, kind, matches.length), {
+        untrusted: false,
+        structured: metadataData(shown, kind, matches.length)
+      });
     }
   );
 
@@ -373,11 +438,12 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get Jira project",
       description: "Project details: lead, issue types, components and versions/releases.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: projectOutput,
       inputSchema: { projectKey: z.string().min(1).optional(), raw: rawFlag }
     },
     async ({ projectKey, raw }) => {
       const project = await client.getProject(resolveProject(projectKey));
-      return respond(raw, project, formatProjectDetail);
+      return respond(raw, project, formatProjectDetail, { structured: projectData(project) });
     }
   );
 
@@ -387,6 +453,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "List Jira filters",
       description: "Search saved filters by name; returns ids (for jira_run_filter) and their JQL.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: filtersOutput,
       inputSchema: {
         query: z.string().optional().describe("Part of the filter name."),
         limit: limitParam(100, 25, "filters"),
@@ -395,7 +462,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ query, limit, raw }) => {
       const filters = await client.findFilters({ name: query, limit: limit ?? 25 });
-      return respond(raw, filters, formatFilters);
+      return respond(raw, filters, formatFilters, { structured: filtersData(filters) });
     }
   );
 
@@ -405,6 +472,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Run Jira filter",
       description: "Run a saved filter by id and list the matching issues (like jira_search_issues).",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: runFilterOutput,
       inputSchema: {
         filterId: z.string().min(1),
         maxResults: z.number().int().min(1).max(100).optional(),
@@ -420,9 +488,15 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       }
 
       const result = await client.searchIssues({ jql: filter.jql, maxResults, nextPageToken });
-      return raw
-        ? toTextResult({ filter, result }, client.customFields)
-        : toMarkdownResult(`Filter ${filter.name ?? filterId}: ${filter.jql}\n\n${formatSearch(result)}`);
+      return respond(
+        raw,
+        { filter, result },
+        () => `Filter ${filter.name ?? filterId}: ${filter.jql}\n\n${formatSearch(result)}`,
+        {
+          customFields: client.customFields,
+          structured: { filter: { id: filter.id, name: filter.name, jql: filter.jql }, ...searchData(result) }
+        }
+      );
     }
   );
 
@@ -432,11 +506,14 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get Jira remote links",
       description: "Links from an issue to the outside: pull requests, Confluence pages, documents.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: remoteLinksOutput,
       inputSchema: { issueKey: z.string().min(2), raw: rawFlag }
     },
     async ({ issueKey, raw }) => {
       const links = await client.getRemoteLinks(issueKey);
-      return respond(raw, links, (items) => formatRemoteLinks(items, issueKey));
+      return respond(raw, links, (items) => formatRemoteLinks(items, issueKey), {
+        structured: remoteLinksData(links, issueKey)
+      });
     }
   );
 
@@ -446,6 +523,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "List Jira boards",
       description: "Agile boards (Scrum/Kanban) with ids for jira_list_sprints. Filter by name or project key.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: boardsOutput,
       inputSchema: {
         query: z.string().optional().describe("Part of the board name."),
         projectKey: z.string().optional().describe("Only boards of this project."),
@@ -455,7 +533,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ query, projectKey, limit, raw }) => {
       const boards = await client.getBoards({ name: query, projectKey, limit: limit ?? 25 });
-      return respond(raw, boards, formatBoards);
+      return respond(raw, boards, formatBoards, { structured: boardsData(boards) });
     }
   );
 
@@ -466,6 +544,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       description:
         "Sprints of a Scrum board with ids for jira_get_sprint_issues. Use state=active for the current one.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: sprintsOutput,
       inputSchema: {
         boardId: z.string().min(1).describe("Board id from jira_list_boards."),
         state: z.enum(["active", "future", "closed"]).optional().describe("Only sprints in this state."),
@@ -474,7 +553,9 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ boardId, state, raw }) => {
       const sprints = await client.getSprints(boardId, state);
-      return respond(raw, sprints, (items) => formatSprints(items, boardId));
+      return respond(raw, sprints, (items) => formatSprints(items, boardId), {
+        structured: sprintsData(sprints, boardId)
+      });
     }
   );
 
@@ -484,6 +565,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       title: "Get Jira sprint issues",
       description: "Issues of a sprint (id from jira_list_sprints), page by page via startAt.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: searchOutput,
       inputSchema: {
         sprintId: z.string().min(1),
         limit: z.number().int().min(1).max(100).optional().describe("Page size (default 50)."),
@@ -494,14 +576,13 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     async ({ sprintId, limit, startAt, raw }) => {
       const result = await client.getSprintIssues(sprintId, { limit: limit ?? 50, startAt: startAt ?? 0 });
 
-      if (raw) {
-        return toTextResult(result, client.customFields);
-      }
-
       const shown = (result.issues ?? []).length;
       const next = (result.startAt ?? 0) + shown;
-      const more = result.total !== undefined && next < result.total ? `\n\nnextStartAt: ${next}` : "";
-      return toMarkdownResult(`${formatSearch(result)}${more}`);
+      const hasMore = result.total !== undefined && next < result.total;
+      return respond(raw, result, (value) => `${formatSearch(value)}${hasMore ? `\n\nnextStartAt: ${next}` : ""}`, {
+        customFields: client.customFields,
+        structured: { ...searchData(result), nextStartAt: hasMore ? next : undefined }
+      });
     }
   );
 }

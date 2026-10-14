@@ -6,6 +6,7 @@ import { z } from "zod";
 import type { ConfluenceClient } from "../confluence-client.js";
 import { MAX_DOWNLOAD_BYTES } from "../http.js";
 import type { JiraClient } from "../jira-client.js";
+import { downloadOutput } from "../structured.js";
 import { READ_ONLY_ANNOTATIONS } from "./shared.js";
 
 // Bigger images blow up the context when base64-encoded, so they are only saved to disk.
@@ -64,11 +65,15 @@ async function saveDownload(
     }
   ];
 
-  if (isImage && !tooLarge && options.inline !== false) {
+  const inlined = isImage && !tooLarge && options.inline !== false;
+  if (inlined) {
     content.push({ type: "image", data: (await readFile(target)).toString("base64"), mimeType });
   }
 
-  return { content };
+  return {
+    content,
+    structuredContent: { path: target, filename, mimeType, bytes, inlined }
+  };
 }
 
 const outputPathParam = z
@@ -105,6 +110,7 @@ export function registerAttachmentTools(
         "Download an attachment (e.g. a screenshot) by its id from jira_list_attachments. Saves it to disk and, " +
         "for images, also returns the image itself so it can be looked at directly.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: downloadOutput,
       inputSchema: {
         attachmentId: z.string().min(1).describe("Attachment id from jira_list_attachments."),
         outputPath: outputPathParam,
@@ -133,6 +139,7 @@ export function registerAttachmentTools(
         "Download a page attachment by its id from confluence_list_attachments. Saves it to disk and, for " +
         "images, also returns the image itself.",
       annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: downloadOutput,
       inputSchema: {
         attachmentId: z.string().min(1).describe("Attachment id from confluence_list_attachments."),
         outputPath: outputPathParam,
