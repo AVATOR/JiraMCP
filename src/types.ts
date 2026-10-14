@@ -170,4 +170,5 @@ export type ConfluenceSearchHit = {
 export type ConfluenceSearchResult = {
   results?: ConfluenceSearchHit[];
   totalSize?: number;
+  _links?: ConfluenceLinks;
 };

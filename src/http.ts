@@ -2,6 +2,8 @@ import type { JsonValue } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
+// Rate limiting and transient gateway errors; everything else is returned to the caller as-is.
+const RETRY_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ERROR_BODY_CHARS = 1000;
 // Safety cap when walking a paginated listing to its end.
 export const MAX_LIST_PAGES = 20;
@@ -25,7 +27,7 @@ function sleep(ms: number): Promise<void> {
 /**
  * Retry-After is either seconds or an HTTP date; fall back to exponential backoff.
  *
- * @param response The 429/503 response.
+ * @param response The retryable (429/502/503/504) response.
  * @param attempt Zero-based retry number, used for exponential backoff.
  * @returns Delay in milliseconds, at most 60 s.
  */
@@ -61,11 +63,11 @@ export class AtlassianHttp {
   }
 
   /**
-   * Issues a GET, retrying on 429/503.
+   * Issues a GET, retrying on 429, 502, 503 and 504.
    *
    * @param url Request URL.
    * @param accept Accept header value.
-   * @returns The response, after retrying on 429/503.
+   * @returns The response, after retrying on 429/502/503/504.
    */
   async fetchWithRetry(url: URL, accept: string): Promise<Response> {
     for (let attempt = 0; ; attempt++) {
@@ -79,7 +81,7 @@ export class AtlassianHttp {
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
       });
 
-      if ((response.status === 429 || response.status === 503) && attempt < MAX_RETRIES) {
+      if (RETRY_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
         await response.body?.cancel();
         await sleep(retryDelayMs(response, attempt));
         continue;

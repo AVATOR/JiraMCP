@@ -83,14 +83,19 @@ export class JiraClient {
   /**
    * /search/jql paginates with nextPageToken only; it ignores startAt and returns no total.
    *
-   * @param params JQL, page size and page token.
+   * @param params JQL, page size, page token and extra field ids beyond the default columns.
    * @returns Raw search response.
    */
-  async searchIssues(params: { jql: string; maxResults?: number; nextPageToken?: string }): Promise<JiraSearchResult> {
+  async searchIssues(params: {
+    jql: string;
+    maxResults?: number;
+    nextPageToken?: string;
+    fields?: string[];
+  }): Promise<JiraSearchResult> {
     const query: Record<string, string> = {
       jql: params.jql,
       maxResults: String(params.maxResults ?? 20),
-      fields: SEARCH_FIELDS
+      fields: [SEARCH_FIELDS, ...(params.fields ?? [])].join(",")
     };
 
     if (params.nextPageToken) {

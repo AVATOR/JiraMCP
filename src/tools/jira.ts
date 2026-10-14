@@ -61,12 +61,22 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         jql: z.string().min(1),
         maxResults: z.number().int().min(1).max(100).optional(),
         nextPageToken: nextPageTokenParam,
+        fields: z
+          .array(z.string().min(1))
+          .max(20)
+          .optional()
+          .describe(
+            "Extra field ids to return in addition to the default columns (e.g. labels, description, " +
+              "customfield_10145). Shown as extra table columns, clipped to 200 characters."
+          ),
         raw: rawFlag
       }
     },
-    async ({ jql, maxResults, nextPageToken, raw }) => {
-      const result = await client.searchIssues({ jql, maxResults, nextPageToken });
-      return raw ? toTextResult(result, client.customFields) : toMarkdownResult(formatSearch(result));
+    async ({ jql, maxResults, nextPageToken, fields, raw }) => {
+      const result = await client.searchIssues({ jql, maxResults, nextPageToken, fields });
+      return raw
+        ? toTextResult(result, client.customFields)
+        : toMarkdownResult(formatSearch(result, fields, client.customFields));
     }
   );
 
