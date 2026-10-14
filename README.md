@@ -174,10 +174,18 @@ npm run setup    # run the setup wizard from source
 - `confluence_get_space_pages`
 - `confluence_list_spaces`
 
+## Structured output
+
+Every tool declares an `outputSchema` and returns `structuredContent` next to the Markdown text:
+the same compact fields the Markdown shows, as JSON, so clients can use the data without parsing
+tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
+`jira_search_issues` also accepts `includeTotal` for an approximate total.
+
 ## Security model
 
-- The server uses Jira/Confluence REST API GET endpoints only; every request goes through
-  a single GET-only client (30 s timeout, retries on HTTP 429/503 honouring `Retry-After`).
+- The server uses Jira/Confluence REST API GET endpoints (plus one read-only POST,
+  `search/approximate-count`, behind an allowlist); every request goes through
+  a single HTTP client (30 s timeout, retries on HTTP 429/502/503/504 honouring `Retry-After`).
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
 - Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
   server instructions tell the client not to follow instructions found in it.

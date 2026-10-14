@@ -122,6 +122,17 @@ export class JiraClient {
   }
 
   /**
+   * Counts the issues matching a JQL query. Jira only offers an estimate, via a read-only POST.
+   *
+   * @param jql JQL query.
+   * @returns Approximate number of matching issues.
+   */
+  async countIssues(jql: string): Promise<number> {
+    const result = await this.http.postRead<{ count?: number }>("/rest/api/3/search/approximate-count", { jql });
+    return result?.count ?? 0;
+  }
+
+  /**
    * Lists a project's issues, most recently updated first.
    *
    * @param projectKey Project key.
@@ -270,15 +281,23 @@ export class JiraClient {
   }
 
   /**
-   * Downloads attachment content into memory, refusing files above the size limit.
+   * Streams attachment content to a file, refusing files above the size limit.
    *
    * @param attachmentId Attachment id.
-   * @returns File bytes and mime type.
+   * @param target File to write.
+   * @param overwrite Replace an existing file.
+   * @returns Bytes written and mime type.
    */
-  async downloadAttachment(attachmentId: string): Promise<{ data: Buffer; mimeType: string }> {
-    return this.http.download(
+  async downloadAttachment(
+    attachmentId: string,
+    target: string,
+    overwrite: boolean
+  ): Promise<{ bytes: number; mimeType: string }> {
+    return this.http.downloadToFile(
       `/rest/api/3/attachment/content/${encodeURIComponent(attachmentId)}`,
-      `Jira attachment ${attachmentId}`
+      `Jira attachment ${attachmentId}`,
+      target,
+      overwrite
     );
   }
 

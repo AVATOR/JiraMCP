@@ -64,6 +64,19 @@ test("AtlassianHttp only ever issues GET requests", async () => {
   assert.deepEqual(methods, ["GET", "GET"]);
 });
 
+test("AtlassianHttp refuses POST to anything but the allowlisted read-only endpoints", async () => {
+  const methods: (string | undefined)[] = [];
+  const fetchImpl = ((_input: URL, init?: RequestInit) => {
+    methods.push(init?.method);
+    return Promise.resolve(new Response('{"count":3}', { headers: { "content-type": "application/json" } }));
+  }) as unknown as typeof fetch;
+  const http = new AtlassianHttp({ baseUrl: "https://x.atlassian.net", email: "a@b.c", apiToken: "t" }, fetchImpl);
+
+  await assert.rejects(http.postRead("/rest/api/3/issue", { fields: {} }), /POST is not allowed/);
+  assert.deepEqual(await http.postRead("/rest/api/3/search/approximate-count", { jql: "x" }), { count: 3 });
+  assert.deepEqual(methods, ["POST"]);
+});
+
 test("matchesQuery is a case-insensitive substring match over all parts", () => {
   assert.equal(matchesQuery(undefined, "Anything"), true);
   assert.equal(matchesQuery("  ", "Anything"), true);

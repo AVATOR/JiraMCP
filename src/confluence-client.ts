@@ -179,18 +179,29 @@ export class ConfluenceClient {
   }
 
   /**
-   * Downloads an attachment into memory.
+   * Streams an attachment to a file.
    *
    * @param meta Metadata of the attachment, holding its download link.
-   * @returns File bytes and mime type.
+   * @param target File to write.
+   * @param overwrite Replace an existing file.
+   * @returns Bytes written and mime type.
    */
-  async downloadAttachment(meta: ConfluenceAttachment): Promise<{ data: Buffer; mimeType: string }> {
+  async downloadAttachment(
+    meta: ConfluenceAttachment,
+    target: string,
+    overwrite: boolean
+  ): Promise<{ bytes: number; mimeType: string }> {
     if (!meta.downloadLink) {
       throw new Error(`Confluence attachment ${meta.id ?? ""} has no download link`);
     }
 
     // downloadLink is relative to the /wiki context.
-    return this.http.download(`/wiki${meta.downloadLink}`, `Confluence attachment ${meta.id ?? ""}`);
+    return this.http.downloadToFile(
+      `/wiki${meta.downloadLink}`,
+      `Confluence attachment ${meta.id ?? ""}`,
+      target,
+      overwrite
+    );
   }
 
   /**

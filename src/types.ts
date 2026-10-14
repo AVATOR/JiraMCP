@@ -96,6 +96,8 @@ export type JiraIssue = {
 export type JiraSearchResult = {
   issues?: JiraIssue[];
   total?: number;
+  // Added by the server from /search/approximate-count when requested; not part of the Jira response.
+  approximateTotal?: number;
   nextPageToken?: string;
   isLast?: boolean;
 };

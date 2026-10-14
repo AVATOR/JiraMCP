@@ -65,7 +65,7 @@ function scalar(value: unknown): string {
  * @param options ADF rendering options.
  * @returns Readable text, empty string for empty values.
  */
-function fieldValue(value: unknown, options: AdfOptions = {}): string {
+export function fieldValue(value: unknown, options: AdfOptions = {}): string {
   if (value === null || value === undefined || value === "") {
     return "";
   }
@@ -88,6 +88,16 @@ function fieldValue(value: unknown, options: AdfOptions = {}): string {
   }
 
   return scalar(value);
+}
+
+/**
+ * Renders a description or custom field in full, as Markdown text.
+ *
+ * @param value Raw field value.
+ * @returns Readable text, empty string for empty values.
+ */
+export function issueDescription(value: unknown): string {
+  return fieldValue(value, { full: true });
 }
 
 /**
@@ -218,12 +228,28 @@ function truncate(text: string, maxLength: number, commentId: string): string {
  */
 export function formatComment(comment: JiraComment, view: Pick<CommentView, "maxLength" | "full">): string {
   const id = String(comment.id);
-  const body = adfToMarkdown(comment.body, { full: view.full, commentId: id });
   const edited =
     comment.updated && comment.updated !== comment.created ? ` (edited ${shortDate(comment.updated)})` : "";
   const header = `### ${shortDate(comment.created)} — ${userName(comment.author)}${edited} · id ${id}`;
 
-  return `${header}\n${view.full ? body : truncate(body, view.maxLength, id)}`;
+  return `${header}\n${commentBody(comment, view).text}`;
+}
+
+/**
+ * The body of a comment as Markdown, truncated like the Markdown view unless full.
+ *
+ * @param comment Comment payload.
+ * @param view Truncation limit and the full flag.
+ * @returns The text and whether it was cut.
+ */
+export function commentBody(
+  comment: JiraComment,
+  view: Pick<CommentView, "maxLength" | "full">
+): { text: string; truncated: boolean } {
+  const id = String(comment.id);
+  const body = adfToMarkdown(comment.body, { full: view.full, commentId: id });
+  const truncated = !view.full && body.length > view.maxLength;
+  return { text: view.full ? body : truncate(body, view.maxLength, id), truncated };
 }
 
 /**
@@ -259,7 +285,12 @@ export function formatSearch(
   customFields: CustomFieldMapping[] = []
 ): string {
   const issues = result?.issues ?? [];
-  const total = result?.total !== undefined ? ` of ${result.total}` : "";
+  const total =
+    result?.total !== undefined
+      ? ` of ${result.total}`
+      : result?.approximateTotal !== undefined
+        ? ` of ~${result.approximateTotal}`
+        : "";
   const more = result?.nextPageToken && result?.isLast !== true;
   const rows = issues.map((issue) => {
     const f = issue.fields ?? {};

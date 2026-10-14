@@ -112,6 +112,28 @@ test("jira_search_issues passes JQL, page size and token through", async () => {
   assert.equal(params.get("nextPageToken"), "prev");
 });
 
+test("jira_search_issues includeTotal adds the approximate count via a read-only POST", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/search/jql": () => json({ issues: [{ key: "ABC-1", fields: { summary: "One" } }], isLast: true }),
+    "/rest/api/3/search/approximate-count": () => json({ count: 42 })
+  });
+
+  const without = await call(client, "jira_search_issues", { jql: "project = ABC" });
+  assert.match(without.text, /^1 issues/);
+  assert.ok(!calls.some((entry) => entry.url.pathname.endsWith("approximate-count")));
+
+  const { text, result } = await call(client, "jira_search_issues", { jql: "project = ABC", includeTotal: true });
+  assert.match(text, /^1 of ~42 issues/);
+
+  const countCall = calls.find((entry) => entry.url.pathname.endsWith("approximate-count"));
+  assert.deepEqual(JSON.parse(countCall?.init?.body as string), { jql: "project = ABC" });
+  assert.equal(countCall?.init?.method, "POST");
+  assert.equal(result.isError, undefined);
+
+  const raw = await call(client, "jira_search_issues", { jql: "project = ABC", includeTotal: true, raw: true });
+  assert.equal(JSON.parse(raw.text).approximateTotal, 42);
+});
+
 test("jira_get_project_issues quotes the project key and falls back to the default project", async () => {
   const routes = { "/rest/api/3/search/jql": () => json({ issues: [] }) };
 
@@ -623,4 +645,50 @@ test("Agile tools list boards, sprints and sprint issues with paging", async () 
   const issues = await call(client, "jira_get_sprint_issues", { sprintId: "9", limit: 1 });
   assert.match(issues.text, /\| ABC-1 \| One \|/);
   assert.match(issues.text, /nextStartAt: 1/);
+});
+
+test("jira_download_attachment stops a stream that outgrows the limit and leaves no partial file", async () => {
+  const chunk = Buffer.alloc(1024 * 1024);
+  let sent = 0;
+  const body = new ReadableStream<Uint8Array>({
+    pull(controller) {
+      controller.enqueue(chunk);
+      sent += 1;
+    }
+  });
+  const { client } = await connect({
+    "/rest/api/3/attachment/10": () => json({ id: "10", filename: "big.bin", mimeType: "application/octet-stream" }),
+    // No content-length, so only the streaming limit can catch this.
+    "/rest/api/3/attachment/content/10": () =>
+      new Response(body, { headers: { "content-type": "application/octet-stream" } })
+  });
+
+  const { result, text } = await call(client, "jira_download_attachment", { attachmentId: "10" });
+
+  assert.equal(result.isError, true);
+  assert.match(text, /above the .*-byte limit/);
+  assert.ok(sent < 200, "the download was cut off early");
+  await assert.rejects(readFile(path.join(downloadDir, "10-big.bin")));
+});
+
+test("tools return compact structuredContent matching their outputSchema, in both Markdown and raw mode", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1": () =>
+      json({
+        key: "ABC-1",
+        fields: { summary: "One", status: { name: "Open" }, labels: ["x"], assignee: { displayName: "Ann" } }
+      })
+  });
+  const { tools } = await client.listTools();
+  assert.ok(tools.find((tool) => tool.name === "jira_get_issue")?.outputSchema, "outputSchema is declared");
+
+  const markdown = await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+  assert.equal(markdown.result.structuredContent.key, "ABC-1");
+  assert.equal(markdown.result.structuredContent.status, "Open");
+  assert.deepEqual(markdown.result.structuredContent.labels, ["x"]);
+  assert.equal(markdown.result.structuredContent.assignee.displayName, "Ann");
+
+  const raw = await call(client, "jira_get_issue", { issueKey: "ABC-1", raw: true });
+  assert.equal(raw.result.structuredContent.summary, "One");
+  assert.equal(JSON.parse(raw.text).key, "ABC-1");
 });
