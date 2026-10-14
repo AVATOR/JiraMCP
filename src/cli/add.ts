@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-import { readFile, writeFile, mkdir, access } from "node:fs/promises";
+import { writeFile, mkdir, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { basicAuthHeader } from "../auth.js";
+import { ensureGitIgnored, getIn, readJson, targets } from "./config-files.js";
 import { ask, confirm, log, select, styles } from "./prompt.js";
 
 const PACKAGE_NAME = "jira-readonly-mcp";
@@ -16,59 +18,6 @@ type ServerEntry = {
   env: Record<string, string>;
 };
 
-type ConfigTarget = {
-  id: string;
-  label: string;
-  hint: string;
-  file: string;
-  // Where the server map lives inside the file; differs between clients.
-  pathInFile: string[];
-  gitIgnorable: boolean;
-};
-
-/**
- * Client config files the entry can be written to, relative to the working directory.
- *
- * @param cwd Project directory that holds the project-level config files.
- * @returns Config files the entry can be written to.
- */
-function targets(cwd: string): ConfigTarget[] {
-  return [
-    {
-      id: "claude-project",
-      label: "Claude Code — this project",
-      hint: ".mcp.json, shared with everyone who opens the repo",
-      file: path.join(cwd, ".mcp.json"),
-      pathInFile: ["mcpServers"],
-      gitIgnorable: true
-    },
-    {
-      id: "cursor-project",
-      label: "Cursor — this project",
-      hint: ".cursor/mcp.json",
-      file: path.join(cwd, ".cursor", "mcp.json"),
-      pathInFile: ["mcpServers"],
-      gitIgnorable: true
-    },
-    {
-      id: "vscode-project",
-      label: "VS Code / Copilot — this project",
-      hint: ".vscode/mcp.json",
-      file: path.join(cwd, ".vscode", "mcp.json"),
-      pathInFile: ["servers"],
-      gitIgnorable: true
-    },
-    {
-      id: "claude-global",
-      label: "Claude Code — global (all projects)",
-      hint: "~/.claude.json",
-      file: path.join(os.homedir(), ".claude.json"),
-      pathInFile: ["mcpServers"],
-      gitIgnorable: false
-    }
-  ];
-}
-
 /**
  * Adds https:// when missing and strips trailing slashes.
  *
@@ -78,17 +27,6 @@ function targets(cwd: string): ConfigTarget[] {
 function normalizeBaseUrl(value: string): string {
   const withScheme = /^https?:\/\//i.test(value) ? value : `https://${value}`;
   return withScheme.replace(/\/+$/, "");
-}
-
-/**
- * Basic auth header value for an Atlassian email and API token.
- *
- * @param email Atlassian account email.
- * @param apiToken Atlassian API token.
- * @returns Value for the Authorization header.
- */
-function authHeader(email: string, apiToken: string): string {
-  return `Basic ${Buffer.from(`${email}:${apiToken}`).toString("base64")}`;
 }
 
 /**
@@ -102,7 +40,7 @@ function authHeader(email: string, apiToken: string): string {
  */
 async function jiraGet<T>(baseUrl: string, email: string, apiToken: string, endpoint: string): Promise<T> {
   const response = await fetch(`${baseUrl}${endpoint}`, {
-    headers: { Authorization: authHeader(email, apiToken), Accept: "application/json" }
+    headers: { Authorization: basicAuthHeader(email, apiToken), Accept: "application/json" }
   });
 
   if (!response.ok) {
@@ -110,47 +48,6 @@ async function jiraGet<T>(baseUrl: string, email: string, apiToken: string, endp
   }
 
   return (await response.json()) as T;
-}
-
-/**
- * Reads a JSON config file; a missing file counts as empty, an invalid one is an error.
- *
- * @param file Path of the config file.
- * @returns Parsed object, or an empty one when the file does not exist.
- */
-async function readJson(file: string): Promise<Record<string, any>> {
-  try {
-    const raw = await readFile(file, "utf8");
-    const parsed = JSON.parse(raw);
-    return parsed && typeof parsed === "object" ? parsed : {};
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === "ENOENT") {
-      return {};
-    }
-
-    throw new Error(`Cannot parse ${file}: ${(error as Error).message}`, { cause: error });
-  }
-}
-
-/**
- * Returns the nested object at the key path, creating missing levels.
- *
- * @param root Config object to descend into.
- * @param keys Key path, e.g. ["mcpServers"].
- * @returns The nested object at that path.
- */
-function getIn(root: Record<string, any>, keys: string[]): Record<string, any> {
-  let node = root;
-
-  for (const key of keys) {
-    if (!node[key] || typeof node[key] !== "object") {
-      node[key] = {};
-    }
-
-    node = node[key];
-  }
-
-  return node;
 }
 
 /**
@@ -180,34 +77,6 @@ async function findLocalCheckout(): Promise<string | undefined> {
   }
 
   return undefined;
-}
-
-/**
- * Appends the entry to .gitignore unless already listed; returns whether it was added.
- *
- * @param cwd Project directory that holds .gitignore.
- * @param entry Path to ignore, relative to cwd.
- * @returns True when the entry was added, false when it was already listed.
- */
-async function ensureGitIgnored(cwd: string, entry: string) {
-  const file = path.join(cwd, ".gitignore");
-  let content = "";
-
-  try {
-    content = await readFile(file, "utf8");
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
-  }
-
-  if (content.split(/\r?\n/).some((line) => line.trim() === entry)) {
-    return false;
-  }
-
-  const prefix = content && !content.endsWith("\n") ? "\n" : "";
-  await writeFile(file, `${content}${prefix}${entry}\n`, "utf8");
-  return true;
 }
 
 /**

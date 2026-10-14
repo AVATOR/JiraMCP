@@ -22,10 +22,12 @@ import {
 } from "../compact/index.js";
 import type { JiraClient } from "../jira-client.js";
 import {
+  limitParam,
   matchesQuery,
   nextPageTokenParam,
   rawFlag,
   READ_ONLY_ANNOTATIONS,
+  respond,
   toMarkdownResult,
   toTextResult
 } from "./shared.js";
@@ -37,6 +39,22 @@ import {
  * @param client Jira client the tools read through.
  */
 export function registerJiraTools(server: McpServer, client: JiraClient) {
+  /**
+   * Picks the explicit project key or the configured default.
+   *
+   * @param projectKey Key given by the caller, if any.
+   * @returns The project key to use.
+   */
+  const resolveProject = (projectKey: string | undefined): string => {
+    const resolved = projectKey ?? client.defaultProject;
+
+    if (!resolved) {
+      throw new Error("projectKey is required when JIRA_DEFAULT_PROJECT is not set");
+    }
+
+    return resolved;
+  };
+
   const customFieldsHint = client.customFields.length
     ? ` Returns these configured custom fields: ${client.customFields
         .map((field) => (field.alias === field.id ? field.id : `${field.alias} (${field.id})`))
@@ -103,14 +121,8 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       }
     },
     async ({ projectKey, maxResults, nextPageToken, raw }) => {
-      const resolvedProject = projectKey ?? client.defaultProject;
-
-      if (!resolvedProject) {
-        throw new Error("projectKey is required when JIRA_DEFAULT_PROJECT is not set");
-      }
-
-      const result = await client.getProjectIssues(resolvedProject, maxResults, nextPageToken);
-      return raw ? toTextResult(result, client.customFields) : toMarkdownResult(formatSearch(result));
+      const result = await client.getProjectIssues(resolveProject(projectKey), maxResults, nextPageToken);
+      return respond(raw, result, formatSearch, { customFields: client.customFields });
     }
   );
 
@@ -185,7 +197,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ issueKey, raw }) => {
       const attachments = await client.getAttachments(issueKey);
-      return raw ? toTextResult(attachments) : toMarkdownResult(formatAttachments(attachments, issueKey));
+      return respond(raw, attachments, (items) => formatAttachments(items, issueKey));
     }
   );
 
@@ -207,7 +219,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       const fields = (await client.getFields()).filter(
         (field) => (!customOnly || field.custom === true) && matchesQuery(query, field.name, field.id)
       );
-      return raw ? toTextResult(fields) : toMarkdownResult(formatFields(fields), { untrusted: false });
+      return respond(raw, fields, formatFields, { untrusted: false });
     }
   );
 
@@ -221,14 +233,14 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
         query: z.string().optional().describe("Case-insensitive text the project name or key must contain."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max projects to return (default 50)."),
+        limit: limitParam(200, 50, "projects"),
         raw: rawFlag
       }
     },
     async ({ query, limit, raw }) => {
       const matches = (await client.getProjects()).filter((project) => matchesQuery(query, project.name, project.key));
       const shown = matches.slice(0, limit ?? 50);
-      return raw ? toTextResult(shown) : toMarkdownResult(formatProjects(shown, matches.length), { untrusted: false });
+      return respond(raw, shown, (items) => formatProjects(items, matches.length), { untrusted: false });
     }
   );
 
@@ -242,7 +254,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ raw }) => {
       const user = await client.getCurrentUser();
-      return raw ? toTextResult(user) : toMarkdownResult(formatCurrentUser(user), { untrusted: false });
+      return respond(raw, user, formatCurrentUser, { untrusted: false });
     }
   );
 
@@ -255,15 +267,16 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
         query: z.string().min(1).describe("Part of the display name or email address."),
-        limit: z.number().int().min(1).max(50).optional().describe("Max users to return (default 10)."),
+        limit: limitParam(50, 10, "users"),
         raw: rawFlag
       }
     },
     async ({ query, limit, raw }) => {
       const users = await client.findUsers(query, limit ?? 10);
-      return raw ? toTextResult(users) : toMarkdownResult(formatUsers(users), { untrusted: false });
+      return respond(raw, users, formatUsers, { untrusted: false });
     }
   );
+
   server.registerTool(
     "jira_get_changelog",
     {
@@ -275,7 +288,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       inputSchema: {
         issueKey: z.string().min(2),
         field: z.string().optional().describe("Only changes of this field name, e.g. status or assignee."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max changes to return (default 20)."),
+        limit: limitParam(200, 20, "changes"),
         raw: rawFlag
       }
     },
@@ -289,9 +302,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
         .filter((entry) => entry.items.length)
         .reverse();
       const shown = matching.slice(0, limit ?? 20);
-      return raw
-        ? toTextResult(shown)
-        : toMarkdownResult(formatChangelog(shown, { issueKey, total: matching.length, field }));
+      return respond(raw, shown, (entries) => formatChangelog(entries, { issueKey, total: matching.length, field }));
     }
   );
 
@@ -305,7 +316,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ issueKey, raw }) => {
       const worklogs = await client.getWorklogs(issueKey);
-      return raw ? toTextResult(worklogs) : toMarkdownResult(formatWorklogs(worklogs, issueKey));
+      return respond(raw, worklogs, (items) => formatWorklogs(items, issueKey));
     }
   );
 
@@ -321,9 +332,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ issueKey, raw }) => {
       const transitions = await client.getTransitions(issueKey);
-      return raw
-        ? toTextResult(transitions)
-        : toMarkdownResult(formatTransitions(transitions, issueKey), { untrusted: false });
+      return respond(raw, transitions, (items) => formatTransitions(items, issueKey), { untrusted: false });
     }
   );
 
@@ -338,16 +347,14 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       inputSchema: {
         kind: z.enum(["statuses", "issueTypes", "priorities"]).describe("Which list to return."),
         query: z.string().optional().describe("Case-insensitive text the name must contain."),
-        limit: z.number().int().min(1).max(500).optional().describe("Max items to return (default 100)."),
+        limit: limitParam(500, 100, "items"),
         raw: rawFlag
       }
     },
     async ({ kind, query, limit, raw }) => {
       const matches = (await client.getReference(kind)).filter((item) => matchesQuery(query, item.name));
       const shown = matches.slice(0, limit ?? 100);
-      return raw
-        ? toTextResult(shown)
-        : toMarkdownResult(formatReference(shown, kind, matches.length), { untrusted: false });
+      return respond(raw, shown, (items) => formatReference(items, kind, matches.length), { untrusted: false });
     }
   );
 
@@ -360,14 +367,8 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       inputSchema: { projectKey: z.string().min(1).optional(), raw: rawFlag }
     },
     async ({ projectKey, raw }) => {
-      const resolved = projectKey ?? client.defaultProject;
-
-      if (!resolved) {
-        throw new Error("projectKey is required when JIRA_DEFAULT_PROJECT is not set");
-      }
-
-      const project = await client.getProject(resolved);
-      return raw ? toTextResult(project) : toMarkdownResult(formatProjectDetail(project));
+      const project = await client.getProject(resolveProject(projectKey));
+      return respond(raw, project, formatProjectDetail);
     }
   );
 
@@ -379,13 +380,13 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
         query: z.string().optional().describe("Part of the filter name."),
-        limit: z.number().int().min(1).max(100).optional().describe("Max filters to return (default 25)."),
+        limit: limitParam(100, 25, "filters"),
         raw: rawFlag
       }
     },
     async ({ query, limit, raw }) => {
       const filters = await client.findFilters({ name: query, limit: limit ?? 25 });
-      return raw ? toTextResult(filters) : toMarkdownResult(formatFilters(filters));
+      return respond(raw, filters, formatFilters);
     }
   );
 
@@ -426,7 +427,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ issueKey, raw }) => {
       const links = await client.getRemoteLinks(issueKey);
-      return raw ? toTextResult(links) : toMarkdownResult(formatRemoteLinks(links, issueKey));
+      return respond(raw, links, (items) => formatRemoteLinks(items, issueKey));
     }
   );
 
@@ -439,13 +440,13 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
       inputSchema: {
         query: z.string().optional().describe("Part of the board name."),
         projectKey: z.string().optional().describe("Only boards of this project."),
-        limit: z.number().int().min(1).max(100).optional().describe("Max boards to return (default 25)."),
+        limit: limitParam(100, 25, "boards"),
         raw: rawFlag
       }
     },
     async ({ query, projectKey, limit, raw }) => {
       const boards = await client.getBoards({ name: query, projectKey, limit: limit ?? 25 });
-      return raw ? toTextResult(boards) : toMarkdownResult(formatBoards(boards));
+      return respond(raw, boards, formatBoards);
     }
   );
 
@@ -464,7 +465,7 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
     },
     async ({ boardId, state, raw }) => {
       const sprints = await client.getSprints(boardId, state);
-      return raw ? toTextResult(sprints) : toMarkdownResult(formatSprints(sprints, boardId));
+      return respond(raw, sprints, (items) => formatSprints(items, boardId));
     }
   );
 

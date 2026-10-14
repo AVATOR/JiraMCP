@@ -15,7 +15,6 @@ import type {
   JiraPage,
   JiraProject,
   JiraProjectDetail,
-  JiraProjectSearchPage,
   JiraReferenceItem,
   JiraRemoteLink,
   JiraSearchResult,
@@ -53,6 +52,14 @@ const BASE_ISSUE_FIELDS = [
 const SEARCH_FIELDS = "summary,status,issuetype,priority,assignee,project,created,updated";
 
 const issuePath = (issueKey: string) => `/rest/api/3/issue/${encodeURIComponent(issueKey)}`;
+
+/**
+ * Narrows an unchecked response to a list; Jira occasionally answers with an object or nothing.
+ *
+ * @param value Parsed response body.
+ * @returns The value when it is an array, otherwise an empty list.
+ */
+const asArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[]) : []);
 
 /**
  * Jira REST client. Only issues GET requests, so it cannot modify anything.
@@ -136,8 +143,7 @@ export class JiraClient {
    */
   async getFields(): Promise<JiraField[]> {
     return this.cache.get("fields", async () => {
-      const fields = await this.http.get<unknown>("/rest/api/3/field");
-      return Array.isArray(fields) ? (fields as JiraField[]) : [];
+      return asArray<JiraField>(await this.http.get<unknown>("/rest/api/3/field"));
     });
   }
 
@@ -146,24 +152,7 @@ export class JiraClient {
    * @returns Every browsable project, fetched page by page.
    */
   async getProjects(): Promise<JiraProject[]> {
-    return this.cache.get("projects", async () => {
-      const projects: JiraProject[] = [];
-
-      for (let page = 0; page < MAX_LIST_PAGES; page++) {
-        const result = await this.http.get<JiraProjectSearchPage>("/rest/api/3/project/search", {
-          maxResults: "100",
-          startAt: String(projects.length)
-        });
-        const values = result?.values ?? [];
-        projects.push(...values);
-
-        if (result?.isLast !== false || !values.length) {
-          break;
-        }
-      }
-
-      return projects;
-    });
+    return this.cache.get("projects", () => this.listAll<JiraProject>("/rest/api/3/project/search", "values"));
   }
 
   /**
@@ -183,11 +172,9 @@ export class JiraClient {
    * @returns Matching users.
    */
   async findUsers(query: string, maxResults: number): Promise<JiraUser[]> {
-    const users = await this.http.get<unknown>("/rest/api/3/user/search", {
-      query,
-      maxResults: String(maxResults)
-    });
-    return Array.isArray(users) ? (users as JiraUser[]) : [];
+    return asArray<JiraUser>(
+      await this.http.get<unknown>("/rest/api/3/user/search", { query, maxResults: String(maxResults) })
+    );
   }
 
   /**
@@ -373,8 +360,7 @@ export class JiraClient {
       priorities: "/rest/api/3/priority"
     };
     return this.cache.get(`reference-${kind}`, async () => {
-      const items = await this.http.get<unknown>(paths[kind]);
-      return Array.isArray(items) ? (items as JiraReferenceItem[]) : [];
+      return asArray<JiraReferenceItem>(await this.http.get<unknown>(paths[kind]));
     });
   }
 
@@ -421,8 +407,7 @@ export class JiraClient {
    * @returns Remote links.
    */
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
-    const links = await this.http.get<unknown>(`${issuePath(issueKey)}/remotelink`);
-    return Array.isArray(links) ? (links as JiraRemoteLink[]) : [];
+    return asArray<JiraRemoteLink>(await this.http.get<unknown>(`${issuePath(issueKey)}/remotelink`));
   }
 
   /**

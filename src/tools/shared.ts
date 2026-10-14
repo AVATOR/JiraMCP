@@ -76,6 +76,38 @@ export function toMarkdownResult(text: string, { untrusted = true } = {}) {
 // Marks every tool as safe to call without confirmation: nothing here writes, and all of it talks to Atlassian.
 export const READ_ONLY_ANNOTATIONS = { readOnlyHint: true, openWorldHint: true } as const;
 
+/**
+ * Optional `limit` argument of the listing tools, with the cap and default spelled out in the description.
+ *
+ * @param max Largest accepted value.
+ * @param fallback Value the tool uses when the argument is omitted.
+ * @param noun Plural noun of what is listed, e.g. "projects".
+ * @returns Zod schema for the argument.
+ */
+export function limitParam(max: number, fallback: number, noun: string) {
+  return z.number().int().min(1).max(max).optional().describe(`Max ${noun} to return (default ${fallback}).`);
+}
+
+/**
+ * Builds the tool result for the common raw/Markdown choice: pretty JSON when raw, else rendered Markdown.
+ *
+ * @param raw Value of the tool's `raw` argument.
+ * @param data Payload returned as JSON when raw.
+ * @param render Renders the Markdown form, called only when not raw.
+ * @param options untrusted: append the untrusted-content note (default true); customFields: aliases added to raw issues.
+ * @returns MCP tool result.
+ */
+export function respond<T>(
+  raw: boolean | undefined,
+  data: T,
+  render: (data: T) => string,
+  options: { untrusted?: boolean; customFields?: CustomFieldMapping[] } = {}
+) {
+  return raw
+    ? toTextResult(data, options.customFields)
+    : toMarkdownResult(render(data), { untrusted: options.untrusted ?? true });
+}
+
 export const rawFlag = z.boolean().optional().describe("Return the unprocessed Jira JSON (debugging only; large).");
 export const nextPageTokenParam = z
   .string()
