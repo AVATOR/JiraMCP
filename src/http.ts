@@ -1,3 +1,4 @@
+import { basicAuthHeader } from "./auth.js";
 import type { JsonValue } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -61,7 +62,7 @@ export class AtlassianHttp {
     private readonly fetchImpl: typeof fetch = fetch
   ) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
-    this.authHeader = Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
+    this.authHeader = basicAuthHeader(config.email, config.apiToken);
   }
 
   /**
@@ -77,7 +78,7 @@ export class AtlassianHttp {
         method: "GET",
         headers: {
           Accept: accept,
-          Authorization: `Basic ${this.authHeader}`
+          Authorization: this.authHeader
         },
         redirect: "follow",
         signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)

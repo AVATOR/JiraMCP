@@ -26,6 +26,7 @@
     "dist",
     "!dist/**/*.test.js",
     "!dist/**/*.test.d.ts",
+    "!dist/test-support.*",
     "README.md",
     ".env.example"
   ],

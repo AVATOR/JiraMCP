@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { adfToMarkdown } from "./adf.js";
-import { formatComments, formatConfluenceSpacePages, formatIssue, formatSearch } from "./compact.js";
+import { formatComments, formatConfluenceSpacePages, formatIssue, formatSearch } from "./compact/index.js";
 
 const doc = (...content: any[]) => ({ type: "doc", version: 1, content });
 const p = (...content: any[]) => ({ type: "paragraph", attrs: { localId: "abc" }, content });

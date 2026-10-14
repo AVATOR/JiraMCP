@@ -1,38 +1,28 @@
-// Whitelists the useful parts of Jira REST payloads and renders them as Markdown.
+// Renders Jira REST payloads as compact Markdown.
 
-import { adfToMarkdown, isAdf, type AdfOptions } from "./adf.js";
-import { storageToMarkdown } from "./storage.js";
+import { adfToMarkdown, isAdf, type AdfOptions } from "../adf.js";
 import type {
-  ConfluenceAttachment,
-  ConfluenceChildren,
-  ConfluenceComment,
-  ConfluenceVersion,
-  ConfluencePage,
-  JiraBoard,
-  JiraChangelogEntry,
-  JiraFilter,
-  JiraProjectDetail,
-  JiraReferenceItem,
-  JiraRemoteLink,
-  JiraSprint,
-  JiraTransition,
-  JiraWorklog,
-  ConfluenceSearchResult,
-  ConfluenceSpace,
-  ConfluenceSpacePages,
   CustomFieldMapping,
   JiraAttachment,
+  JiraBoard,
+  JiraChangelogEntry,
   JiraComment,
   JiraField,
+  JiraFilter,
   JiraIssue,
   JiraIssueLink,
   JiraIssueRef,
   JiraProject,
+  JiraProjectDetail,
+  JiraReferenceItem,
+  JiraRemoteLink,
   JiraSearchResult,
-  JiraUser
-} from "./types.js";
-
-export type { CustomFieldMapping };
+  JiraSprint,
+  JiraTransition,
+  JiraUser,
+  JiraWorklog
+} from "../types.js";
+import { clip, countLine, EXTRA_CELL_CHARS, fileSize, shortDate, table, userName } from "./common.js";
 
 export type CommentView = {
   issueKey: string;
@@ -42,24 +32,6 @@ export type CommentView = {
   maxLength: number;
   full: boolean;
 };
-
-// Long values (descriptions) would blow up a table row, so extra columns are clipped.
-const EXTRA_CELL_CHARS = 200;
-const DATE_LENGTH = 16; // "2026-09-18T11:12"
-
-/**
- * Display name of a Jira user with the email when it is available.
- *
- * @param user Jira user object, may be null.
- * @returns "Name <email>", the name alone, or an em dash.
- */
-function userName(user: JiraUser | null | undefined): string {
-  if (!user) {
-    return "—";
-  }
-
-  return user.emailAddress ? `${user.displayName} <${user.emailAddress}>` : (user.displayName ?? "—");
-}
 
 /**
  * Comma-separated names of a list of Jira objects (components, versions).
@@ -74,39 +46,6 @@ function names(values: unknown): string {
         .filter(Boolean)
         .join(", ")
     : "";
-}
-
-/**
- * Makes a value safe for a Markdown table cell (no pipes or line breaks).
- *
- * @param value Any value.
- * @returns Single-line text that is safe inside a table cell.
- */
-function cell(value: unknown): string {
-  const text =
-    typeof value === "string" || typeof value === "number" ? String(value) : value == null ? "" : JSON.stringify(value);
-  return text.replace(/\|/g, "\\|").replace(/\s*\n\s*/g, " ");
-}
-
-/**
- * Shortens an ISO timestamp to "YYYY-MM-DD HH:MM".
- *
- * @param value ISO timestamp.
- * @returns "YYYY-MM-DD HH:MM", or an em dash when not a string.
- */
-function shortDate(value: unknown): string {
-  return typeof value === "string" ? value.slice(0, DATE_LENGTH).replace("T", " ") : "—";
-}
-
-/**
- * Clips text to a maximum length with an ellipsis.
- *
- * @param text Text to clip.
- * @param max Maximum number of characters kept.
- * @returns The text, shortened when longer than max.
- */
-function clip(text: string, max: number): string {
-  return text.length > max ? `${text.slice(0, max)}…` : text;
 }
 
 /**
@@ -223,29 +162,6 @@ export function formatIssue(issue: JiraIssue, customFields: CustomFieldMapping[]
 }
 
 /**
- * Formats a byte count as a human-readable size.
- *
- * @param bytes Size in bytes.
- * @returns Human-readable size such as "1.5 MB"; an em dash for non-numbers.
- */
-function fileSize(bytes: unknown): string {
-  const size = Number(bytes);
-  if (!Number.isFinite(size)) {
-    return "—";
-  }
-
-  const units = ["B", "KB", "MB", "GB"];
-  let value = size;
-  let unit = 0;
-  while (value >= 1024 && unit < units.length - 1) {
-    value /= 1024;
-    unit += 1;
-  }
-
-  return `${unit === 0 ? value : value.toFixed(1)} ${units[unit]}`;
-}
-
-/**
  * Jira keeps one attachment list per issue: files dropped on the description and images pasted into comments both land here, so a single table covers both.
  *
  * @param attachments Attachment objects of the issue.
@@ -259,24 +175,19 @@ export function formatAttachments(attachments: JiraAttachment[], issueKey: strin
     return `${header}\n\n_(none)_`;
   }
 
-  const rows = attachments.map((attachment) => {
-    const cells = [
-      attachment.id,
-      attachment.filename ?? "",
-      attachment.mimeType ?? "",
-      fileSize(attachment.size),
-      userName(attachment.author),
-      shortDate(attachment.created)
-    ].map(cell);
-    return `| ${cells.join(" | ")} |`;
-  });
+  const rows = attachments.map((attachment) => [
+    attachment.id,
+    attachment.filename ?? "",
+    attachment.mimeType ?? "",
+    fileSize(attachment.size),
+    userName(attachment.author),
+    shortDate(attachment.created)
+  ]);
 
   return [
     header,
     "",
-    "| Id | Filename | Type | Size | Author | Created |",
-    "|---|---|---|---|---|---|",
-    ...rows,
+    table(["Id", "Filename", "Type", "Size", "Author", "Created"], rows),
     "",
     "Download one with jira_download_attachment (attachmentId from the Id column)."
   ].join("\n");
@@ -335,16 +246,6 @@ export function formatComments(comments: JiraComment[], view: CommentView): stri
 }
 
 /**
- * Extracts the cursor of the next page from a Confluence `_links.next` URL.
- *
- * @param links `_links` object of a paginated Confluence response.
- * @returns Cursor value, or null on the last page.
- */
-function nextCursor(links: { next?: string } | undefined): string | null {
-  return typeof links?.next === "string" ? new URL(links.next, "http://x").searchParams.get("cursor") : null;
-}
-
-/**
  * Renders a Jira search result as a table, with nextPageToken when more pages exist.
  *
  * @param result Response of /rest/api/3/search/jql.
@@ -362,7 +263,7 @@ export function formatSearch(
   const more = result?.nextPageToken && result?.isLast !== true;
   const rows = issues.map((issue) => {
     const f = issue.fields ?? {};
-    const cells = [
+    return [
       issue.key,
       f.summary ?? "",
       f.status?.name ?? "",
@@ -371,8 +272,7 @@ export function formatSearch(
       f.assignee?.displayName ?? "—",
       shortDate(f.updated),
       ...extraFields.map((id) => clip(fieldValue(f[id]), EXTRA_CELL_CHARS))
-    ].map(cell);
-    return `| ${cells.join(" | ")} |`;
+    ];
   });
   const extraHeaders = extraFields.map((id) => customFields.find((field) => field.id === id)?.alias ?? id);
 
@@ -381,9 +281,7 @@ export function formatSearch(
   if (rows.length) {
     lines.push(
       "",
-      `| ${["Key", "Summary", "Status", "Type", "Priority", "Assignee", "Updated", ...extraHeaders].join(" | ")} |`,
-      `|${"---|".repeat(7 + extraFields.length)}`,
-      ...rows
+      table(["Key", "Summary", "Status", "Type", "Priority", "Assignee", "Updated", ...extraHeaders], rows)
     );
   }
 
@@ -406,28 +304,14 @@ export function formatFields(fields: JiraField[]): string {
   if (fields.length) {
     lines.push(
       "",
-      "| Id | Name | Type | Custom |",
-      "|---|---|---|---|",
-      ...fields.map(
-        (field) =>
-          `| ${[field.id, field.name, field.schema?.type ?? "", field.custom ? "yes" : ""].map(cell).join(" | ")} |`
+      table(
+        ["Id", "Name", "Type", "Custom"],
+        fields.map((field) => [field.id, field.name, field.schema?.type ?? "", field.custom ? "yes" : ""])
       )
     );
   }
 
   return lines.join("\n");
-}
-
-/**
- * Summary line for a listing that may have been cut by a limit.
- *
- * @param label Plural noun, e.g. projects.
- * @param shown Items shown.
- * @param total Items matching before the limit.
- * @returns Count line such as "5 of 12 projects (raise limit or narrow query)".
- */
-function countLine(label: string, shown: number, total: number): string {
-  return shown < total ? `${shown} of ${total} ${label} (raise limit or narrow query)` : `${total} ${label}`;
 }
 
 /**
@@ -443,11 +327,9 @@ export function formatProjects(projects: JiraProject[], total: number): string {
   if (projects.length) {
     lines.push(
       "",
-      "| Key | Name | Type | Style |",
-      "|---|---|---|---|",
-      ...projects.map(
-        (project) =>
-          `| ${[project.key, project.name, project.projectTypeKey ?? "", project.style ?? ""].map(cell).join(" | ")} |`
+      table(
+        ["Key", "Name", "Type", "Style"],
+        projects.map((project) => [project.key, project.name, project.projectTypeKey ?? "", project.style ?? ""])
       )
     );
   }
@@ -488,143 +370,18 @@ export function formatUsers(users: JiraUser[]): string {
   if (users.length) {
     lines.push(
       "",
-      "| Account id | Name | Email | Active |",
-      "|---|---|---|---|",
-      ...users.map(
-        (user) =>
-          `| ${[user.accountId, user.displayName, user.emailAddress ?? "", user.active === false ? "no" : "yes"].map(cell).join(" | ")} |`
+      table(
+        ["Account id", "Name", "Email", "Active"],
+        users.map((user) => [
+          user.accountId,
+          user.displayName,
+          user.emailAddress ?? "",
+          user.active === false ? "no" : "yes"
+        ])
       )
     );
   }
 
-  return lines.join("\n");
-}
-
-/**
- * v2 spaces: [{ id, key, name, type, status }].
- *
- * @param spaces Spaces to show.
- * @param total Number of spaces matching before the limit.
- * @returns Table of space keys and names.
- */
-export function formatConfluenceSpaces(spaces: ConfluenceSpace[], total: number): string {
-  const lines = [countLine("spaces", spaces.length, total)];
-
-  if (spaces.length) {
-    lines.push(
-      "",
-      "| Key | Name | Type | Status |",
-      "|---|---|---|---|",
-      ...spaces.map(
-        (space) => `| ${[space.key, space.name, space.type ?? "", space.status ?? ""].map(cell).join(" | ")} |`
-      )
-    );
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
- *
- * @param result Response of the v1 CQL search.
- * @returns Table of matching pages.
- */
-export function formatConfluenceSearch(result: ConfluenceSearchResult): string {
-  const pages = result?.results ?? [];
-  const total = result?.totalSize !== undefined ? ` of ${result.totalSize}` : "";
-  const lines = [`${pages.length}${total} pages`];
-
-  if (pages.length) {
-    lines.push(
-      "",
-      "| Id | Title | Space | Modified |",
-      "|---|---|---|---|",
-      ...pages.map((page) => {
-        // The key is what confluence_get_space_pages takes; displayUrl is "/spaces/<KEY>".
-        const space =
-          page.resultGlobalContainer?.displayUrl?.match(/\/spaces\/([^/]+)/)?.[1] ??
-          page.content?.space?.key ??
-          page.resultGlobalContainer?.title ??
-          "";
-        return `| ${[page.content?.id, page.content?.title ?? page.title, space, shortDate(page.lastModified)].map(cell).join(" | ")} |`;
-      })
-    );
-  }
-
-  const cursor = nextCursor(result?._links);
-  if (cursor) {
-    lines.push("", `cursor: ${cursor}`);
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * v2 space pages: { results: [{ id, title, status, parentId, version: { createdAt } }], _links: { next } }.
- *
- * @param result Response of the v2 space pages endpoint.
- * @param spaceKey Space key shown in the header.
- * @returns Table of pages, with the cursor when more exist.
- */
-export function formatConfluenceSpacePages(result: ConfluenceSpacePages, spaceKey: string): string {
-  const pages = result?.results ?? [];
-  const lines = [`${spaceKey} — ${pages.length} pages`];
-
-  if (pages.length) {
-    lines.push(
-      "",
-      "| Id | Title | Parent | Modified |",
-      "|---|---|---|---|",
-      ...pages.map(
-        (page) =>
-          `| ${[page.id, page.title, page.parentId ?? "", shortDate(page.version?.createdAt)].map(cell).join(" | ")} |`
-      )
-    );
-  }
-
-  const cursor = nextCursor(result?._links);
-  if (cursor) {
-    lines.push("", `cursor: ${cursor}`);
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * v2 page with body-format=storage: { id, title, spaceId, parentId, version, body.storage.value, _links.webui }.
- *
- * @param page v2 page with a storage-format body.
- * @param wikiBaseUrl Base URL used to build the page link.
- * @param ancestors Ancestor pages, top-most first, shown as the page path.
- * @returns Title, metadata and body as Markdown.
- */
-export function formatConfluencePage(
-  page: ConfluencePage,
-  wikiBaseUrl: string,
-  ancestors: { id?: string; title?: string }[] = []
-): string {
-  const lines = [`# ${page?.title ?? ""}`, ""];
-  const meta: [string, string | undefined][] = [
-    ["Id", page?.id],
-    ["Space id", page?.spaceId],
-    ["Parent", page?.parentId],
-    [
-      "Version",
-      page?.version?.number !== undefined ? `${page.version.number} (${shortDate(page.version.createdAt)})` : ""
-    ],
-    ["Url", page?._links?.webui ? `${wikiBaseUrl}${page._links.webui}` : ""],
-    ["Path", ancestors.map((ancestor) => `${ancestor.title} (${ancestor.id})`).join(" › ")],
-    ["Labels", (page?.labels?.results ?? []).map((label) => label.name).join(", ")]
-  ];
-
-  for (const [label, value] of meta) {
-    if (value) {
-      lines.push(`- **${label}:** ${value}`);
-    }
-  }
-
-  lines.push("", storageToMarkdown(page?.body?.storage?.value ?? "") || "_(empty)_");
   return lines.join("\n");
 }
 
@@ -672,12 +429,14 @@ export function formatWorklogs(worklogs: JiraWorklog[], issueKey: string): strin
     return header;
   }
 
-  const rows = worklogs.map((worklog) => {
-    const comment = clip(adfToMarkdown(worklog.comment), EXTRA_CELL_CHARS);
-    return `| ${[shortDate(worklog.started), userName(worklog.author), worklog.timeSpent ?? "", comment].map(cell).join(" | ")} |`;
-  });
+  const rows = worklogs.map((worklog) => [
+    shortDate(worklog.started),
+    userName(worklog.author),
+    worklog.timeSpent ?? "",
+    clip(adfToMarkdown(worklog.comment), EXTRA_CELL_CHARS)
+  ]);
 
-  return [header, "", "| Started | Author | Time | Comment |", "|---|---|---|---|", ...rows].join("\n");
+  return [header, "", table(["Started", "Author", "Time", "Comment"], rows)].join("\n");
 }
 
 /**
@@ -694,10 +453,8 @@ export function formatTransitions(transitions: JiraTransition[], issueKey: strin
     return header;
   }
 
-  const rows = transitions.map(
-    (transition) => `| ${[transition.id, transition.name, transition.to?.name].map(cell).join(" | ")} |`
-  );
-  return [header, "", "| Id | Name | Target status |", "|---|---|---|", ...rows].join("\n");
+  const rows = transitions.map((transition) => [transition.id, transition.name, transition.to?.name]);
+  return [header, "", table(["Id", "Name", "Target status"], rows)].join("\n");
 }
 
 /**
@@ -714,12 +471,15 @@ export function formatReference(items: JiraReferenceItem[], label: string, total
   if (items.length) {
     lines.push(
       "",
-      "| Id | Name | Info | Description |",
-      "|---|---|---|---|",
-      ...items.map((item) => {
-        const info = item.statusCategory?.name ?? (item.subtask ? "subtask" : "");
-        return `| ${[item.id, item.name, info, clip(item.description ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`;
-      })
+      table(
+        ["Id", "Name", "Info", "Description"],
+        items.map((item) => [
+          item.id,
+          item.name,
+          item.statusCategory?.name ?? (item.subtask ? "subtask" : ""),
+          clip(item.description ?? "", EXTRA_CELL_CHARS)
+        ])
+      )
     );
   }
 
@@ -789,11 +549,14 @@ export function formatFilters(filters: JiraFilter[]): string {
   if (filters.length) {
     lines.push(
       "",
-      "| Id | Name | Owner | JQL |",
-      "|---|---|---|---|",
-      ...filters.map(
-        (filter) =>
-          `| ${[filter.id, filter.name, filter.owner?.displayName ?? "", clip(filter.jql ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`
+      table(
+        ["Id", "Name", "Owner", "JQL"],
+        filters.map((filter) => [
+          filter.id,
+          filter.name,
+          filter.owner?.displayName ?? "",
+          clip(filter.jql ?? "", EXTRA_CELL_CHARS)
+        ])
       )
     );
   }
@@ -836,11 +599,14 @@ export function formatBoards(boards: JiraBoard[]): string {
   if (boards.length) {
     lines.push(
       "",
-      "| Id | Name | Type | Project |",
-      "|---|---|---|---|",
-      ...boards.map(
-        (board) =>
-          `| ${[board.id, board.name, board.type, board.location?.projectKey ?? board.location?.displayName ?? ""].map(cell).join(" | ")} |`
+      table(
+        ["Id", "Name", "Type", "Project"],
+        boards.map((board) => [
+          board.id,
+          board.name,
+          board.type,
+          board.location?.projectKey ?? board.location?.displayName ?? ""
+        ])
       )
     );
   }
@@ -862,134 +628,13 @@ export function formatSprints(sprints: JiraSprint[], boardId: string): string {
     return header;
   }
 
-  const rows = sprints.map(
-    (sprint) =>
-      `| ${[sprint.id, sprint.name, sprint.state, shortDate(sprint.startDate), shortDate(sprint.endDate), clip(sprint.goal ?? "", EXTRA_CELL_CHARS)].map(cell).join(" | ")} |`
-  );
-  return [header, "", "| Id | Name | State | Start | End | Goal |", "|---|---|---|---|---|---|", ...rows].join("\n");
-}
-
-/**
- * Renders the child pages of a page, with the cursor when more exist.
- *
- * @param result Response of the v2 children endpoint.
- * @param pageId Parent page id shown in the header.
- * @returns Markdown table.
- */
-export function formatConfluenceChildren(result: ConfluenceChildren, pageId: string): string {
-  const pages = result?.results ?? [];
-  const lines = [`Page ${pageId} — ${pages.length} child pages`];
-
-  if (pages.length) {
-    lines.push(
-      "",
-      "| Id | Title |",
-      "|---|---|",
-      ...pages.map((page) => `| ${[page.id, page.title].map(cell).join(" | ")} |`)
-    );
-  }
-
-  const cursor = nextCursor(result?._links);
-  if (cursor) {
-    lines.push("", `cursor: ${cursor}`);
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Renders page comments, converting the storage-format bodies to Markdown.
- *
- * @param comments Comments of one kind.
- * @param view Page id, comment kind and the next cursor.
- * @returns Markdown with one block per comment.
- */
-export function formatConfluenceComments(
-  comments: ConfluenceComment[],
-  view: { pageId: string; kind: string; cursor: string | null }
-): string {
-  const header = `Page ${view.pageId} — ${comments.length} ${view.kind} comments`;
-  const blocks = comments.map((comment) => {
-    const status =
-      comment.resolutionStatus && comment.resolutionStatus !== "open" ? ` · ${comment.resolutionStatus}` : "";
-    const title = `### ${shortDate(comment.version?.createdAt)} — author ${comment.version?.authorId ?? "?"} · id ${comment.id}${status}`;
-    return `${title}\n${storageToMarkdown(comment.body?.storage?.value ?? "") || "_(empty)_"}`;
-  });
-  const lines = [header, ...blocks];
-
-  if (view.cursor) {
-    lines.push(`cursor: ${view.cursor}`);
-  }
-
-  return lines.join("\n\n");
-}
-
-/**
- * Renders the attachments of a Confluence page.
- *
- * @param result Response of the v2 attachments endpoint.
- * @param pageId Page id shown in the header.
- * @returns Markdown table with the ids needed by confluence_download_attachment.
- */
-export function formatConfluenceAttachments(
-  result: { results?: ConfluenceAttachment[]; _links?: { next?: string } },
-  pageId: string
-): string {
-  const attachments = result?.results ?? [];
-  const lines = [`Page ${pageId} — ${attachments.length} attachments`];
-
-  if (attachments.length) {
-    lines.push(
-      "",
-      "| Id | Filename | Type | Size | Created |",
-      "|---|---|---|---|---|",
-      ...attachments.map(
-        (attachment) =>
-          `| ${[attachment.id, attachment.title, attachment.mediaType, fileSize(attachment.fileSize), shortDate(attachment.createdAt ?? attachment.version?.createdAt)].map(cell).join(" | ")} |`
-      ),
-      "",
-      "Download one with confluence_download_attachment (attachmentId from the Id column)."
-    );
-  }
-
-  const cursor = nextCursor(result?._links);
-  if (cursor) {
-    lines.push("", `cursor: ${cursor}`);
-  }
-
-  return lines.join("\n");
-}
-
-/**
- * Renders the version history of a page.
- *
- * @param result Response of the v2 versions endpoint.
- * @param pageId Page id shown in the header.
- * @returns Markdown table, newest version first.
- */
-export function formatConfluenceVersions(
-  result: { results?: ConfluenceVersion[]; _links?: { next?: string } },
-  pageId: string
-): string {
-  const versions = result?.results ?? [];
-  const lines = [`Page ${pageId} — ${versions.length} versions (newest first)`];
-
-  if (versions.length) {
-    lines.push(
-      "",
-      "| Version | Date | Author | Message |",
-      "|---|---|---|---|",
-      ...versions.map(
-        (version) =>
-          `| ${[version.number, shortDate(version.createdAt), version.authorId ?? "", `${version.minorEdit ? "(minor) " : ""}${version.message ?? ""}`].map(cell).join(" | ")} |`
-      )
-    );
-  }
-
-  const cursor = nextCursor(result?._links);
-  if (cursor) {
-    lines.push("", `cursor: ${cursor}`);
-  }
-
-  return lines.join("\n");
+  const rows = sprints.map((sprint) => [
+    sprint.id,
+    sprint.name,
+    sprint.state,
+    shortDate(sprint.startDate),
+    shortDate(sprint.endDate),
+    clip(sprint.goal ?? "", EXTRA_CELL_CHARS)
+  ]);
+  return [header, "", table(["Id", "Name", "State", "Start", "End", "Goal"], rows)].join("\n");
 }

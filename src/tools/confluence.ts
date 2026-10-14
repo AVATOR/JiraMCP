@@ -9,9 +9,18 @@ import {
   formatConfluenceSearch,
   formatConfluenceSpacePages,
   formatConfluenceSpaces
-} from "../compact.js";
+} from "../compact/index.js";
 import type { ConfluenceClient } from "../confluence-client.js";
-import { matchesQuery, rawFlag, READ_ONLY_ANNOTATIONS, toMarkdownResult, toTextResult } from "./shared.js";
+import { nextCursor } from "../query.js";
+import {
+  limitParam,
+  matchesQuery,
+  rawFlag,
+  READ_ONLY_ANNOTATIONS,
+  respond,
+  toMarkdownResult,
+  toTextResult
+} from "./shared.js";
 
 /**
  * Registers the read-only Confluence tools.
@@ -64,7 +73,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
       inputSchema: {
         pageId: pageIdParam,
         spaceKey: spaceKeyParam,
-        limit: z.number().int().min(1).max(250).optional().describe("Max pages to return (default 50)."),
+        limit: limitParam(250, 50, "pages"),
         cursor: cursorParam,
         raw: rawFlag
       }
@@ -72,7 +81,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
     async ({ pageId, spaceKey, limit, cursor, raw }) => {
       const id = await client.resolvePageId(pageId, spaceKey);
       const result = await client.getChildren(id, limit ?? 50, cursor);
-      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceChildren(result, id));
+      return respond(raw, result, (page) => formatConfluenceChildren(page, id));
     }
   );
 
@@ -86,7 +95,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         pageId: pageIdParam,
         spaceKey: spaceKeyParam,
         kind: z.enum(["footer", "inline"]).optional().describe("footer (default) or inline comments."),
-        limit: z.number().int().min(1).max(100).optional().describe("Max comments to return (default 25)."),
+        limit: limitParam(100, 25, "comments"),
         cursor: cursorParam,
         raw: rawFlag
       }
@@ -100,9 +109,12 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         return toTextResult(result);
       }
 
-      const next = result?._links?.next ? new URL(result._links.next, "http://x").searchParams.get("cursor") : null;
       return toMarkdownResult(
-        formatConfluenceComments(result?.results ?? [], { pageId: id, kind: resolvedKind, cursor: next })
+        formatConfluenceComments(result?.results ?? [], {
+          pageId: id,
+          kind: resolvedKind,
+          cursor: nextCursor(result?._links)
+        })
       );
     }
   );
@@ -116,7 +128,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
       inputSchema: {
         pageId: pageIdParam,
         spaceKey: spaceKeyParam,
-        limit: z.number().int().min(1).max(250).optional().describe("Max attachments to return (default 50)."),
+        limit: limitParam(250, 50, "attachments"),
         cursor: cursorParam,
         raw: rawFlag
       }
@@ -124,7 +136,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
     async ({ pageId, spaceKey, limit, cursor, raw }) => {
       const id = await client.resolvePageId(pageId, spaceKey);
       const result = await client.getAttachments(id, limit ?? 50, cursor);
-      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceAttachments(result, id));
+      return respond(raw, result, (page) => formatConfluenceAttachments(page, id));
     }
   );
 
@@ -137,7 +149,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
       inputSchema: {
         pageId: pageIdParam,
         spaceKey: spaceKeyParam,
-        limit: z.number().int().min(1).max(100).optional().describe("Max versions to return (default 25)."),
+        limit: limitParam(100, 25, "versions"),
         cursor: cursorParam,
         raw: rawFlag
       }
@@ -145,7 +157,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
     async ({ pageId, spaceKey, limit, cursor, raw }) => {
       const id = await client.resolvePageId(pageId, spaceKey);
       const result = await client.getVersions(id, limit ?? 25, cursor);
-      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceVersions(result, id));
+      return respond(raw, result, (page) => formatConfluenceVersions(page, id));
     }
   );
 
@@ -161,14 +173,14 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         query: z.string().min(1).describe("Words to look for in the page title or body"),
         spaceKey: z.string().min(1).optional().describe("Only search this space (e.g., 'MS')."),
         titleOnly: z.boolean().optional().describe("Match page titles only, not the body."),
-        limit: z.number().int().min(1).max(100).optional().describe("Max pages to return (default 25)."),
-        cursor: z.string().optional().describe("Cursor from the previous result, to fetch the next page."),
+        limit: limitParam(100, 25, "pages"),
+        cursor: cursorParam,
         raw: rawFlag
       }
     },
     async ({ query, spaceKey, titleOnly, limit, cursor, raw }) => {
       const result = await client.searchPages({ query, spaceKey, titleOnly, limit: limit ?? 25, cursor });
-      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceSearch(result));
+      return respond(raw, result, formatConfluenceSearch);
     }
   );
 
@@ -180,14 +192,14 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
       annotations: READ_ONLY_ANNOTATIONS,
       inputSchema: {
         spaceKey: z.string().min(1).describe("The space key (e.g., 'MS')"),
-        limit: z.number().int().min(1).max(250).optional().describe("Max pages to return (default 50)."),
-        cursor: z.string().optional().describe("Cursor from the previous result, to fetch the next page."),
+        limit: limitParam(250, 50, "pages"),
+        cursor: cursorParam,
         raw: rawFlag
       }
     },
     async ({ spaceKey, limit, cursor, raw }) => {
       const result = await client.getSpacePages(spaceKey, limit ?? 50, cursor);
-      return raw ? toTextResult(result) : toMarkdownResult(formatConfluenceSpacePages(result, spaceKey));
+      return respond(raw, result, (page) => formatConfluenceSpacePages(page, spaceKey));
     }
   );
 
@@ -202,7 +214,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
       inputSchema: {
         query: z.string().optional().describe("Case-insensitive text the space name or key must contain."),
         type: z.enum(["global", "personal"]).optional().describe("Only spaces of this type."),
-        limit: z.number().int().min(1).max(200).optional().describe("Max spaces to return (default 50)."),
+        limit: limitParam(200, 50, "spaces"),
         raw: rawFlag
       }
     },
@@ -211,9 +223,7 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         (space) => (!type || space.type === type) && matchesQuery(query, space.name, space.key)
       );
       const shown = matches.slice(0, limit ?? 50);
-      return raw
-        ? toTextResult(shown)
-        : toMarkdownResult(formatConfluenceSpaces(shown, matches.length), { untrusted: false });
+      return respond(raw, shown, (items) => formatConfluenceSpaces(items, matches.length), { untrusted: false });
     }
   );
 }

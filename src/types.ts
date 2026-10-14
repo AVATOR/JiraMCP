@@ -114,11 +114,6 @@ export type JiraProject = {
   style?: string;
 };
 
-export type JiraProjectSearchPage = {
-  values?: JiraProject[];
-  isLast?: boolean;
-};
-
 export type JiraAttachmentMeta = {
   filename?: string;
   mimeType?: string;
