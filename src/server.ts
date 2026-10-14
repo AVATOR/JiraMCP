@@ -11,7 +11,11 @@ import {
   formatConfluencePage,
   formatConfluenceSearch,
   formatConfluenceSpacePages,
+  formatConfluenceSpaces,
+  formatCurrentUser,
   formatFields,
+  formatProjects,
+  formatUsers,
   formatComments,
   formatIssue,
   formatSearch,
@@ -33,6 +37,10 @@ const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
 const MAX_ERROR_BODY_CHARS = 1000;
+// Fields, projects, spaces and the current user rarely change, so listings are reused for a while.
+const REFERENCE_CACHE_TTL_MS = 10 * 60_000;
+// Safety cap when walking a paginated listing to its end.
+const MAX_LIST_PAGES = 20;
 
 /** Makes an attachment name safe to use as a file name. */
 export function sanitizeFileName(name: string): string {
@@ -51,6 +59,8 @@ export type JiraClientConfig = {
 export type ServerDeps = {
   fetch?: typeof fetch;
   downloadDir?: string;
+  // Lifetime of cached reference data (fields, projects, spaces); 0 disables the cache.
+  cacheTtlMs?: number;
 };
 
 const BASE_ISSUE_FIELDS = [
@@ -145,12 +155,36 @@ class JiraReadOnlyClient {
 
   constructor(
     private readonly config: JiraClientConfig,
-    private readonly fetchImpl: typeof fetch = fetch
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly cacheTtlMs: number = REFERENCE_CACHE_TTL_MS
   ) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.authHeader = Buffer.from(`${config.email}:${config.apiToken}`).toString("base64");
     this.defaultProject = config.defaultProject;
     this.customFields = config.customFields;
+  }
+
+  private readonly cache = new Map<string, { expires: number; value: Promise<unknown> }>();
+
+  // Caches the promise, so concurrent callers share one request; failures are not kept.
+  private cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+    const hit = this.cache.get(key);
+    if (hit && hit.expires > Date.now()) {
+      return hit.value as Promise<T>;
+    }
+
+    const value = load();
+    if (this.cacheTtlMs > 0) {
+      const entry = { expires: Date.now() + this.cacheTtlMs, value };
+      this.cache.set(key, entry);
+      value.catch(() => {
+        if (this.cache.get(key) === entry) {
+          this.cache.delete(key);
+        }
+      });
+    }
+
+    return value;
   }
 
   /** Fetches an issue with the base and custom fields; renderedFields only on request. */
@@ -192,8 +226,41 @@ class JiraReadOnlyClient {
 
   /** Lists every Jira field (system and custom) with its id and name. */
   async getFields(): Promise<any[]> {
-    const fields = await this.get("/rest/api/3/field");
-    return Array.isArray(fields) ? fields : [];
+    return this.cached("fields", async () => {
+      const fields = await this.get("/rest/api/3/field");
+      return Array.isArray(fields) ? fields : [];
+    });
+  }
+
+  // Every project the user can browse; filtering happens in the tool, so one listing serves all queries.
+  async getProjects(): Promise<any[]> {
+    return this.cached("projects", async () => {
+      const projects: any[] = [];
+
+      for (let page = 0; page < MAX_LIST_PAGES; page++) {
+        const result: any = await this.get("/rest/api/3/project/search", {
+          maxResults: "100",
+          startAt: String(projects.length)
+        });
+        const values: any[] = result?.values ?? [];
+        projects.push(...values);
+
+        if (result?.isLast !== false || !values.length) {
+          break;
+        }
+      }
+
+      return projects;
+    });
+  }
+
+  async getCurrentUser(): Promise<any> {
+    return this.cached("myself", () => this.get("/rest/api/3/myself"));
+  }
+
+  async findUsers(query: string, maxResults: number): Promise<any[]> {
+    const users = await this.get("/rest/api/3/user/search", { query, maxResults: String(maxResults) });
+    return Array.isArray(users) ? users : [];
   }
 
   /** Fetches the issue's comments in creation order. */
@@ -319,6 +386,34 @@ class JiraReadOnlyClient {
     return this.get("/wiki/rest/api/search", {
       cql: `${clauses.join(" AND ")} ORDER BY lastmodified DESC`,
       limit: String(params.limit)
+    });
+  }
+
+  async getConfluenceSpaces(): Promise<any[]> {
+    return this.cached("confluence-spaces", async () => {
+      const spaces: any[] = [];
+      let cursor: string | null = null;
+
+      for (let page = 0; page < MAX_LIST_PAGES; page++) {
+        const query: Record<string, string> = { limit: "250", sort: "key" };
+        if (cursor) {
+          query.cursor = cursor;
+        }
+
+        const result: any = await this.get("/wiki/api/v2/spaces", query);
+        spaces.push(...(result?.results ?? []));
+
+        cursor =
+          typeof result?._links?.next === "string"
+            ? new URL(result._links.next, "http://x").searchParams.get("cursor")
+            : null;
+
+        if (!cursor) {
+          break;
+        }
+      }
+
+      return spaces;
     });
   }
 
@@ -453,7 +548,7 @@ const nextPageTokenParam = z
 
 /** Creates the MCP server with every read-only Jira and Confluence tool registered. */
 export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): McpServer {
-  const client = new JiraReadOnlyClient(config, deps.fetch);
+  const client = new JiraReadOnlyClient(config, deps.fetch, deps.cacheTtlMs);
   const downloadDir =
     deps.downloadDir ?? (process.env.JIRA_ATTACHMENT_DIR?.trim() || path.join(os.tmpdir(), "jira-attachments"));
 
@@ -688,6 +783,91 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
           (!needle || `${field.name} ${field.id}`.toLowerCase().includes(needle))
       );
       return raw ? toTextResult(fields) : toMarkdownResult(formatFields(fields), { untrusted: false });
+    }
+  );
+
+  server.registerTool(
+    "jira_list_projects",
+    {
+      title: "List Jira projects",
+      description:
+        "List the Jira projects the user can browse, with their keys (for JQL and JIRA_DEFAULT_PROJECT). " +
+        "Filter by name or key with query.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        query: z.string().optional().describe("Case-insensitive text the project name or key must contain."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max projects to return (default 50)."),
+        raw: rawFlag
+      }
+    },
+    async ({ query, limit, raw }) => {
+      const needle = query?.trim().toLowerCase();
+      const matches = (await client.getProjects()).filter(
+        (project) => !needle || `${project.name} ${project.key}`.toLowerCase().includes(needle)
+      );
+      const shown = matches.slice(0, limit ?? 50);
+      return raw ? toTextResult(shown) : toMarkdownResult(formatProjects(shown, matches.length), { untrusted: false });
+    }
+  );
+
+  server.registerTool(
+    "jira_get_current_user",
+    {
+      title: "Get current Jira user",
+      description: "Return the Jira user the server authenticates as (accountId, name, time zone).",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: { raw: rawFlag }
+    },
+    async ({ raw }) => {
+      const user = await client.getCurrentUser();
+      return raw ? toTextResult(user) : toMarkdownResult(formatCurrentUser(user), { untrusted: false });
+    }
+  );
+
+  server.registerTool(
+    "jira_find_users",
+    {
+      title: "Find Jira users",
+      description:
+        'Find Jira users by name or email to get the accountId needed in JQL (e.g. assignee = "<accountId>").',
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        query: z.string().min(1).describe("Part of the display name or email address."),
+        limit: z.number().int().min(1).max(50).optional().describe("Max users to return (default 10)."),
+        raw: rawFlag
+      }
+    },
+    async ({ query, limit, raw }) => {
+      const users = await client.findUsers(query, limit ?? 10);
+      return raw ? toTextResult(users) : toMarkdownResult(formatUsers(users), { untrusted: false });
+    }
+  );
+
+  server.registerTool(
+    "confluence_list_spaces",
+    {
+      title: "List Confluence spaces",
+      description:
+        "List the Confluence spaces the user can see, with their keys (for confluence_get_space_pages and " +
+        "confluence_search_pages). Filter by name or key with query.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      inputSchema: {
+        query: z.string().optional().describe("Case-insensitive text the space name or key must contain."),
+        type: z.enum(["global", "personal"]).optional().describe("Only spaces of this type."),
+        limit: z.number().int().min(1).max(200).optional().describe("Max spaces to return (default 50)."),
+        raw: rawFlag
+      }
+    },
+    async ({ query, type, limit, raw }) => {
+      const needle = query?.trim().toLowerCase();
+      const matches = (await client.getConfluenceSpaces()).filter(
+        (space) =>
+          (!type || space.type === type) && (!needle || `${space.name} ${space.key}`.toLowerCase().includes(needle))
+      );
+      const shown = matches.slice(0, limit ?? 50);
+      return raw
+        ? toTextResult(shown)
+        : toMarkdownResult(formatConfluenceSpaces(shown, matches.length), { untrusted: false });
     }
   );
 

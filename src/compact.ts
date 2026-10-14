@@ -278,6 +278,82 @@ export function formatFields(fields: any[]): string {
   return lines.join("\n");
 }
 
+function countLine(label: string, shown: number, total: number): string {
+  return shown < total ? `${shown} of ${total} ${label} (raise limit or narrow query)` : `${total} ${label}`;
+}
+
+// /rest/api/3/project/search values: [{ key, name, projectTypeKey, style }].
+export function formatProjects(projects: any[], total: number): string {
+  const lines = [countLine("projects", projects.length, total)];
+
+  if (projects.length) {
+    lines.push(
+      "",
+      "| Key | Name | Type | Style |",
+      "|---|---|---|---|",
+      ...projects.map(
+        (project) =>
+          `| ${[project.key, project.name, project.projectTypeKey ?? "", project.style ?? ""].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
+}
+
+// /rest/api/3/myself.
+export function formatCurrentUser(user: any): string {
+  const meta: [string, string | undefined][] = [
+    ["Name", user?.displayName],
+    ["Email", user?.emailAddress],
+    ["Account id", user?.accountId],
+    ["Time zone", user?.timeZone],
+    ["Active", user?.active === undefined ? "" : user.active ? "yes" : "no"]
+  ];
+
+  return meta
+    .filter(([, value]) => value)
+    .map(([label, value]) => `- **${label}:** ${value}`)
+    .join("\n");
+}
+
+// /rest/api/3/user/search: [{ accountId, displayName, emailAddress, active, accountType }].
+export function formatUsers(users: any[]): string {
+  const lines = [`${users.length} users`];
+
+  if (users.length) {
+    lines.push(
+      "",
+      "| Account id | Name | Email | Active |",
+      "|---|---|---|---|",
+      ...users.map(
+        (user) =>
+          `| ${[user.accountId, user.displayName, user.emailAddress ?? "", user.active === false ? "no" : "yes"].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
+}
+
+// v2 spaces: [{ id, key, name, type, status }].
+export function formatConfluenceSpaces(spaces: any[], total: number): string {
+  const lines = [countLine("spaces", spaces.length, total)];
+
+  if (spaces.length) {
+    lines.push(
+      "",
+      "| Key | Name | Type | Status |",
+      "|---|---|---|---|",
+      ...spaces.map(
+        (space) => `| ${[space.key, space.name, space.type ?? "", space.status ?? ""].map(cell).join(" | ")} |`
+      )
+    );
+  }
+
+  return lines.join("\n");
+}
+
 // v1 CQL search result: { results: [{ content: { id, title }, url, lastModified, excerpt }] }.
 export function formatConfluenceSearch(result: any): string {
   const pages: any[] = result?.results ?? [];
