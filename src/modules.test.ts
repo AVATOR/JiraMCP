@@ -100,3 +100,18 @@ test("toTextResult leaves payloads untouched without a custom field mapping", ()
   const payload = { fields: { customfield_1: "x" } };
   assert.deepEqual(JSON.parse(toTextResult(payload).content[0].text), payload);
 });
+
+test("ReferenceCache stays bounded: expired and oldest entries make room", async () => {
+  const cache = new ReferenceCache(60_000);
+  let loads = 0;
+
+  for (let i = 0; i < 1200; i++) {
+    await cache.get(`key-${i}`, () => Promise.resolve(++loads));
+  }
+
+  // The oldest entries were dropped, the newest are still served from the cache.
+  await cache.get("key-1199", () => Promise.resolve(++loads));
+  assert.equal(loads, 1200);
+  await cache.get("key-0", () => Promise.resolve(++loads));
+  assert.equal(loads, 1201);
+});

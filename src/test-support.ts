@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createServer, type JiraClientConfig } from "./server.js";
+import { createServer, type JiraClientConfig, type ServerDeps } from "./server.js";
 
 export const BASE_URL = "https://example.atlassian.net";
 
@@ -45,11 +45,15 @@ afterEach(async () => {
   await rm(downloadDir, { recursive: true, force: true });
 });
 
-export async function connect(routes: Record<string, Route>, config: Partial<JiraClientConfig> = {}) {
+export async function connect(
+  routes: Record<string, Route>,
+  config: Partial<JiraClientConfig> = {},
+  deps: Partial<ServerDeps> = {}
+) {
   const fake = fakeFetch(routes);
   const server = createServer(
     { baseUrl: `${BASE_URL}/`, email: "me@example.com", apiToken: "secret", customFields: [], ...config },
-    { fetch: fake.fetchImpl, downloadDir }
+    { fetch: fake.fetchImpl, downloadDir, ...deps }
   );
   const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
   client = new Client({ name: "test", version: "0.0.0" });
