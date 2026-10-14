@@ -21,6 +21,16 @@ export function userName(user: JiraUser | null | undefined): string {
 }
 
 /**
+ * Narrows an unchecked value to a list of present entries; null entries and non-arrays are dropped.
+ *
+ * @param value Value that should be an array.
+ * @returns The non-null entries, or an empty list.
+ */
+export function list<T>(value: unknown): T[] {
+  return Array.isArray(value) ? (value.filter((entry) => entry !== null && entry !== undefined) as T[]) : [];
+}
+
+/**
  * Makes a value safe for a Markdown table cell (no pipes or line breaks).
  *
  * @param value Any value.

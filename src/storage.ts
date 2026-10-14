@@ -7,6 +7,9 @@ type StorageNode = {
   text?: string;
 };
 
+// Pages come from third parties; nesting beyond this is flattened so rendering cannot overflow the stack.
+const MAX_DEPTH = 400;
+
 const VOID_TAGS = new Set(["br", "hr", "img", "col", "input", "meta", "link"]);
 const BLOCK_TAGS = new Set(["p", "div", "section", "article", "ac:layout", "ac:layout-section", "ac:layout-cell"]);
 const LIST_TAGS = new Set(["ul", "ol", "ac:task-list"]);
@@ -62,7 +65,8 @@ function decodeEntities(text: string): string {
   return text.replace(/&(#x[0-9a-f]+|#\d+|[a-z]+);/gi, (match, entity: string) => {
     if (entity[0] === "#") {
       const code = entity[1] === "x" || entity[1] === "X" ? parseInt(entity.slice(2), 16) : Number(entity.slice(1));
-      return Number.isFinite(code) ? String.fromCodePoint(code) : match;
+      // Out-of-range code points would make fromCodePoint throw on hostile input.
+      return Number.isInteger(code) && code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : match;
     }
 
     return ENTITIES[entity.toLowerCase()] ?? match;
@@ -103,7 +107,7 @@ function parse(source: string): StorageNode {
 
       const node: StorageNode = { tag: opening.toLowerCase(), attrs, children: [] };
       parent.children.push(node);
-      if (!selfClosing && !VOID_TAGS.has(node.tag!)) {
+      if (!selfClosing && !VOID_TAGS.has(node.tag!) && stack.length < MAX_DEPTH) {
         stack.push(node);
       }
     } else if (text !== undefined || whole === "<") {

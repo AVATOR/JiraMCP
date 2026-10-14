@@ -299,7 +299,7 @@ export class JiraClient {
    */
   async getAttachments(issueKey: string): Promise<JiraAttachment[]> {
     const issue = await this.http.get<JiraIssue>(issuePath(issueKey), { fields: "attachment" });
-    return issue?.fields?.attachment ?? [];
+    return Array.isArray(issue?.fields?.attachment) ? issue.fields.attachment.filter(Boolean) : [];
   }
 
   /**
