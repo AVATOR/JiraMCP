@@ -10,6 +10,8 @@ TypeScript MCP server for Jira Cloud with read-only access.
 - Read comments for an issue (newest first, date filter, truncation of large payloads)
 - List and download issue attachments (images are returned inline)
 - Find field ids (including `customfield_*`) by name, list projects, find users and the current user
+- Issue history (changelog), worklogs, available transitions, remote links, project components and versions
+- Statuses, issue types and priorities for JQL, saved filters (list and run), Agile boards, sprints and sprint issues
 - Read Confluence pages as Markdown, full-text search them (optionally per space) and list spaces and a space's pages
 
 This server does not expose any methods for creating or updating issues, comments, transitions, or any other Jira entities.
@@ -156,6 +158,17 @@ npm run setup    # run the setup wizard from source
 - `jira_list_projects`
 - `jira_get_current_user`
 - `jira_find_users`
+- `jira_get_changelog`
+- `jira_get_worklogs`
+- `jira_list_transitions`
+- `jira_list_metadata`
+- `jira_get_project`
+- `jira_list_filters`
+- `jira_run_filter`
+- `jira_get_remote_links`
+- `jira_list_boards`
+- `jira_list_sprints`
+- `jira_get_sprint_issues`
 - `confluence_get_page`
 - `confluence_search_pages`
 - `confluence_get_space_pages`
