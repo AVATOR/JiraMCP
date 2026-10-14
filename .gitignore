@@ -1,4 +1,25 @@
+# Dependencies and build output
 node_modules
 dist
+*.tsbuildinfo
+*.tgz
+
+# Secrets: Jira API tokens live here; only the example is tracked
 .env
+.env.*
+!.env.example
+
+# Test coverage
+coverage
+.nyc_output
+
+# Logs
+*.log
+
+# Editors and OS
 .idea
+.vscode
+.DS_Store
+
+# Claude Code local settings
+.claude/settings.local.json
