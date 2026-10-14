@@ -68,8 +68,13 @@ test("lists every tool with an input schema", async () => {
   const { tools } = await client.listTools();
 
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
+    "confluence_download_attachment",
     "confluence_get_page",
+    "confluence_get_page_children",
+    "confluence_get_page_comments",
+    "confluence_get_page_versions",
     "confluence_get_space_pages",
+    "confluence_list_attachments",
     "confluence_list_spaces",
     "confluence_search_pages",
     "jira_download_attachment",
@@ -857,4 +862,171 @@ test("Agile tools list boards, sprints and sprint issues with paging", async () 
   const issues = await call(client, "jira_get_sprint_issues", { sprintId: "9", limit: 1 });
   assert.match(issues.text, /\| ABC-1 \| One \|/);
   assert.match(issues.text, /nextStartAt: 1/);
+});
+
+test("confluence_get_page shows labels and the page path", async () => {
+  const { client, calls } = await connect({
+    "/wiki/api/v2/pages/123": () =>
+      json({ id: "123", title: "Runbook", labels: { results: [{ name: "ops" }, { name: "oncall" }] }, body: {} }),
+    "/wiki/api/v2/pages/123/ancestors": () =>
+      json({
+        results: [
+          { id: "1", title: "Home" },
+          { id: "2", title: "Teams" }
+        ]
+      })
+  });
+
+  const { text } = await call(client, "confluence_get_page", { pageId: "123" });
+
+  assert.match(text, /- \*\*Path:\*\* Home \(1\) › Teams \(2\)/);
+  assert.match(text, /- \*\*Labels:\*\* ops, oncall/);
+  assert.equal(calls[0].url.searchParams.get("include-labels"), "true");
+});
+
+test("confluence_get_page accepts a URL and a title with spaceKey", async () => {
+  const { client, calls } = await connect({
+    "/wiki/api/v2/pages/555": () => json({ id: "555", title: "From URL" }),
+    "/wiki/api/v2/spaces": () => json({ results: [{ id: "88", key: "MS" }] }),
+    "/wiki/api/v2/pages": () => json({ results: [{ id: "555", title: "From title" }] })
+  });
+
+  const byUrl = await call(client, "confluence_get_page", {
+    pageId: `${BASE_URL}/wiki/spaces/MS/pages/555/Some+Title`
+  });
+  assert.match(byUrl.text, /^# From URL/);
+
+  const byTitle = await call(client, "confluence_get_page", { pageId: "Release notes", spaceKey: "MS" });
+  assert.match(byTitle.text, /^# From URL/);
+  const lookup = calls.find((entry) => entry.url.pathname === "/wiki/api/v2/pages");
+  assert.equal(lookup?.url.searchParams.get("title"), "Release notes");
+  assert.equal(lookup?.url.searchParams.get("space-id"), "88");
+});
+
+test("confluence_get_page reports ambiguous and unknown titles", async () => {
+  const ambiguous = await connect({
+    "/wiki/api/v2/pages": () => json({ results: [{ id: "1" }, { id: "2" }] })
+  });
+  const first = await call(ambiguous.client, "confluence_get_page", { pageId: "Dup" });
+  assert.equal(first.result.isError, true);
+  assert.match(first.text, /Several pages are titled "Dup"/);
+
+  await ambiguous.client.close();
+  const missing = await connect({ "/wiki/api/v2/pages": () => json({ results: [] }) });
+  const second = await call(missing.client, "confluence_get_page", { pageId: "Nope" });
+  assert.match(second.text, /No Confluence page titled "Nope"/);
+});
+
+test("confluence_get_page_children lists children with a cursor", async () => {
+  const { client, calls } = await connect({
+    "/wiki/api/v2/pages/10/children": () =>
+      json({ results: [{ id: "11", title: "Child A" }], _links: { next: "/wiki/api/v2/pages/10/children?cursor=c2" } })
+  });
+
+  const { text } = await call(client, "confluence_get_page_children", { pageId: "10", limit: 5, cursor: "c1" });
+
+  assert.match(text, /1 child pages/);
+  assert.match(text, /\| 11 \| Child A \|/);
+  assert.match(text, /cursor: c2/);
+  assert.equal(calls[0].url.searchParams.get("cursor"), "c1");
+  assert.equal(calls[0].url.searchParams.get("limit"), "5");
+});
+
+test("confluence_get_page_comments renders footer and inline comments", async () => {
+  const { client, calls } = await connect({
+    "/wiki/api/v2/pages/10/footer-comments": () =>
+      json({
+        results: [
+          {
+            id: "c1",
+            version: { createdAt: "2026-09-01T10:00:00.000Z", authorId: "u1" },
+            body: { storage: { value: "<p>Looks <strong>good</strong></p>" } }
+          }
+        ]
+      }),
+    "/wiki/api/v2/pages/10/inline-comments": () =>
+      json({
+        results: [{ id: "c2", resolutionStatus: "resolved", body: { storage: { value: "<p>Typo</p>" } } }]
+      })
+  });
+
+  const footer = await call(client, "confluence_get_page_comments", { pageId: "10" });
+  assert.match(footer.text, /1 footer comments/);
+  assert.match(footer.text, /Looks \*\*good\*\*/);
+  assert.equal(calls[0].url.searchParams.get("body-format"), "storage");
+
+  const inline = await call(client, "confluence_get_page_comments", { pageId: "10", kind: "inline" });
+  assert.match(inline.text, /1 inline comments/);
+  assert.match(inline.text, /resolved/);
+});
+
+test("confluence_list_attachments and confluence_get_page_versions render tables", async () => {
+  const { client } = await connect({
+    "/wiki/api/v2/pages/10/attachments": () =>
+      json({
+        results: [
+          {
+            id: "att1",
+            title: "diagram.png",
+            mediaType: "image/png",
+            fileSize: 2048,
+            createdAt: "2026-09-01T10:00:00Z"
+          }
+        ]
+      }),
+    "/wiki/api/v2/pages/10/versions": () =>
+      json({
+        results: [
+          { number: 3, createdAt: "2026-09-03T10:00:00Z", authorId: "u1", message: "fix typo", minorEdit: true },
+          { number: 2, createdAt: "2026-09-02T10:00:00Z", authorId: "u2" }
+        ]
+      })
+  });
+
+  const attachments = await call(client, "confluence_list_attachments", { pageId: "10" });
+  assert.match(attachments.text, /\| att1 \| diagram.png \| image\/png \| 2.0 KB \|/);
+
+  const versions = await call(client, "confluence_get_page_versions", { pageId: "10" });
+  assert.match(versions.text, /2 versions \(newest first\)/);
+  assert.match(versions.text, /\| 3 \| 2026-09-03 10:00 \| u1 \| \(minor\) fix typo \|/);
+});
+
+test("confluence_download_attachment saves the file via its download link", async () => {
+  const bytes = Buffer.from("hello");
+  const { client, calls } = await connect({
+    "/wiki/api/v2/attachments/att1": () =>
+      json({
+        id: "att1",
+        title: "notes.txt",
+        mediaType: "text/plain",
+        fileSize: 5,
+        downloadLink: "/download/attachments/10/notes.txt?version=1"
+      }),
+    "/wiki/download/attachments/10/notes.txt": () => new Response(bytes, { headers: { "content-type": "text/plain" } })
+  });
+
+  const { text } = await call(client, "confluence_download_attachment", { attachmentId: "att1" });
+
+  assert.match(text, /Saved notes.txt \(text\/plain, 5 bytes\)/);
+  const savedPath = text.match(/to (.+)$/m)?.[1] ?? "";
+  assert.equal(await readFile(savedPath, "utf8"), "hello");
+  assert.equal(calls.at(-1)?.url.searchParams.get("version"), "1");
+});
+
+test("confluence_download_attachment refuses oversized files before downloading", async () => {
+  const { client, calls } = await connect({
+    "/wiki/api/v2/attachments/big": () =>
+      json({
+        id: "big",
+        title: "big.bin",
+        fileSize: 200 * 1024 * 1024,
+        downloadLink: "/download/attachments/10/big.bin"
+      })
+  });
+
+  const { result, text } = await call(client, "confluence_download_attachment", { attachmentId: "big" });
+
+  assert.equal(result.isError, true);
+  assert.match(text, /above the 104857600-byte limit/);
+  assert.equal(calls.length, 1);
 });

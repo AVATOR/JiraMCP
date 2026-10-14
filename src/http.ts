@@ -5,6 +5,8 @@ const MAX_RETRIES = 3;
 // Rate limiting and transient gateway errors; everything else is returned to the caller as-is.
 const RETRY_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ERROR_BODY_CHARS = 1000;
+// Attachments are buffered in memory, so very large files are refused up front.
+export const MAX_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 // Safety cap when walking a paginated listing to its end.
 export const MAX_LIST_PAGES = 20;
 
@@ -118,5 +120,33 @@ export class AtlassianHttp {
 
     const contentType = response.headers.get("content-type") ?? "";
     return (contentType.includes("application/json") ? await response.json() : await response.text()) as T;
+  }
+
+  /**
+   * Downloads file content into memory, refusing files above the size limit. Atlassian redirects
+   * attachment content to a signed media URL; fetch follows it and drops the Authorization header
+   * cross-origin, which that URL does not need.
+   *
+   * @param path API path of the content endpoint.
+   * @param label Name of the file used in error messages.
+   * @returns File bytes and mime type.
+   */
+  async download(path: string, label: string): Promise<{ data: Buffer; mimeType: string }> {
+    const response = await this.fetchWithRetry(new URL(`${this.baseUrl}${path}`), "*/*");
+
+    if (!response.ok) {
+      throw new Error(`Attachment download failed (${response.status} ${response.statusText}) for ${label}`);
+    }
+
+    const length = Number(response.headers.get("content-length"));
+    if (Number.isFinite(length) && length > MAX_DOWNLOAD_BYTES) {
+      await response.body?.cancel();
+      throw new Error(`Attachment ${label} is ${length} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);
+    }
+
+    return {
+      data: Buffer.from(await response.arrayBuffer()),
+      mimeType: (response.headers.get("content-type") ?? "application/octet-stream").split(";")[0].trim()
+    };
   }
 }

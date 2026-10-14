@@ -57,7 +57,7 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
 
   registerJiraTools(server, jira);
   registerConfluenceTools(server, confluence);
-  registerAttachmentTools(server, jira, downloadDir);
+  registerAttachmentTools(server, jira, confluence, downloadDir);
 
   return server;
 }
