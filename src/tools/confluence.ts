@@ -9,8 +9,9 @@ import {
   formatConfluenceSearch,
   formatConfluenceSpacePages,
   formatConfluenceSpaces
-} from "../compact.js";
+} from "../compact/index.js";
 import type { ConfluenceClient } from "../confluence-client.js";
+import { nextCursor } from "../query.js";
 import { matchesQuery, rawFlag, READ_ONLY_ANNOTATIONS, toMarkdownResult, toTextResult } from "./shared.js";
 
 /**
@@ -100,9 +101,12 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         return toTextResult(result);
       }
 
-      const next = result?._links?.next ? new URL(result._links.next, "http://x").searchParams.get("cursor") : null;
       return toMarkdownResult(
-        formatConfluenceComments(result?.results ?? [], { pageId: id, kind: resolvedKind, cursor: next })
+        formatConfluenceComments(result?.results ?? [], {
+          pageId: id,
+          kind: resolvedKind,
+          cursor: nextCursor(result?._links)
+        })
       );
     }
   );

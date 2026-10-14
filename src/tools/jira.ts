@@ -19,7 +19,7 @@ import {
   formatProjects,
   formatSearch,
   formatUsers
-} from "../compact.js";
+} from "../compact/index.js";
 import type { JiraClient } from "../jira-client.js";
 import {
   matchesQuery,

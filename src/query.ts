@@ -25,3 +25,13 @@ export function cqlSearchString(value: string): string {
     .replace(CQL_RESERVED, (char) => `\\\\${char}`);
   return `"${escaped}"`;
 }
+
+/**
+ * Extracts the cursor of the next page from a Confluence `_links.next` URL.
+ *
+ * @param links `_links` object of a paginated Confluence response.
+ * @returns Cursor value, or null on the last page.
+ */
+export function nextCursor(links: { next?: string } | undefined): string | null {
+  return typeof links?.next === "string" ? new URL(links.next, "http://x").searchParams.get("cursor") : null;
+}

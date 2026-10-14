@@ -1,6 +1,6 @@
 import type { ReferenceCache } from "./cache.js";
 import { MAX_LIST_PAGES, type AtlassianHttp } from "./http.js";
-import { cqlSearchString, jqlString } from "./query.js";
+import { cqlSearchString, jqlString, nextCursor } from "./query.js";
 import type {
   ConfluenceAncestor,
   ConfluenceAttachment,
@@ -257,10 +257,7 @@ export class ConfluenceClient {
         const result: ConfluenceSpaceList = await this.http.get<ConfluenceSpaceList>("/wiki/api/v2/spaces", query);
         spaces.push(...(result?.results ?? []));
 
-        cursor =
-          typeof result?._links?.next === "string"
-            ? new URL(result._links.next, "http://x").searchParams.get("cursor")
-            : null;
+        cursor = nextCursor(result?._links);
 
         if (!cursor) {
           break;

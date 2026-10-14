@@ -7,7 +7,7 @@ import {
   formatConfluenceSpacePages,
   formatIssue,
   formatSearch
-} from "./compact.js";
+} from "./compact/index.js";
 
 const adf = (text: string) => ({
   type: "doc",
