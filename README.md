@@ -31,6 +31,8 @@ Optional variables:
 - `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
+- `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
+- `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN` — Streamable HTTP, see below
 
 ### Getting a Jira API token
 
@@ -137,6 +139,26 @@ when the current directory has no `.env`, the one next to the server code (the
 project root of a checkout) is used instead; the two files are never mixed.
 Variables set by the client (its `env` config) take precedence over the file.
 
+### Streamable HTTP (one server for a team)
+
+By default the client starts the server over stdio. To run one shared server instead:
+
+```bash
+MCP_TRANSPORT=http MCP_HTTP_TOKEN=choose-a-long-random-string npx jira-mcp
+# listening on http://127.0.0.1:3000/mcp
+```
+
+Clients then connect to `http://<host>:3000/mcp` and send `Authorization: Bearer <token>`.
+
+- `MCP_HTTP_HOST` (default `127.0.0.1`) and `MCP_HTTP_PORT` (default `3000`) set the address.
+  Listening beyond loopback requires `MCP_HTTP_TOKEN`; the server refuses to start otherwise,
+  because every caller reads Jira with the configured account.
+- Stateless: `POST /mcp` only (GET answers 405), `GET /healthz` for health checks. Put it behind
+  TLS (a reverse proxy) when it leaves your machine; the token travels in a header.
+- The attachment download tools are not registered in this mode, since they would write to the
+  server's disk. `jira_list_attachments` and `confluence_list_attachments` still work.
+- The reference and issue caches are shared by all callers.
+
 For local development from a checkout:
 
 ```bash
@@ -189,6 +211,8 @@ tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
 - Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
   server instructions tell the client not to follow instructions found in it.
-- The only local side effect is `jira_download_attachment` writing a file. An explicit
+- Issue and comment reads are cached for 30 s (`JIRA_ISSUE_CACHE_SECONDS`), so a repeated read can
+  be that stale.
+- The only local side effect is `jira_download_attachment` writing a file (off in HTTP mode). An explicit
   `outputPath` never overwrites an existing file, since attachment content is untrusted.
   Downloads above 100 MB are refused.

@@ -692,3 +692,34 @@ test("tools return compact structuredContent matching their outputSchema, in bot
   assert.equal(raw.result.structuredContent.summary, "One");
   assert.equal(JSON.parse(raw.text).key, "ABC-1");
 });
+
+test("repeated issue and comment reads are served from the short cache, and the cache can be disabled", async () => {
+  const routes = {
+    "/rest/api/3/issue/ABC-1": () => json({ key: "ABC-1", fields: { summary: "Cached" } }),
+    "/rest/api/3/issue/ABC-1/comment": () => json({ comments: [], total: 0 })
+  };
+  const { client, calls } = await connect(routes);
+
+  for (let i = 0; i < 3; i++) {
+    await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+    await call(client, "jira_get_comments", { issueKey: "ABC-1" });
+  }
+  assert.equal(calls.length, 2);
+
+  // Rendered fields are a different request, so raw does not reuse the plain read.
+  await call(client, "jira_get_issue", { issueKey: "ABC-1", raw: true });
+  assert.equal(calls.length, 3);
+});
+
+test("issueCacheTtlMs 0 sends every read to Jira", async () => {
+  const { client, calls } = await connect(
+    { "/rest/api/3/issue/ABC-1": () => json({ key: "ABC-1", fields: { summary: "Fresh" } }) },
+    {},
+    { issueCacheTtlMs: 0 }
+  );
+
+  await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+  await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+
+  assert.equal(calls.length, 2);
+});

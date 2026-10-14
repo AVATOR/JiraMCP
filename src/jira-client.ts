@@ -71,7 +71,9 @@ export class JiraClient {
   constructor(
     private readonly http: AtlassianHttp,
     private readonly cache: ReferenceCache,
-    options: { defaultProject?: string; customFields: CustomFieldMapping[] }
+    options: { defaultProject?: string; customFields: CustomFieldMapping[] },
+    // Short-lived cache for issue and comment reads; without it every read goes to Jira.
+    private readonly issueCache?: ReferenceCache
   ) {
     this.defaultProject = options.defaultProject;
     this.customFields = options.customFields;
@@ -93,7 +95,18 @@ export class JiraClient {
       query.expand = "renderedFields";
     }
 
-    return this.http.get<JiraIssue>(issuePath(issueKey), query);
+    return this.cached(`issue:${issueKey}:${withRendered}`, () => this.http.get<JiraIssue>(issuePath(issueKey), query));
+  }
+
+  /**
+   * Reads through the short-lived issue cache when there is one.
+   *
+   * @param key Cache key.
+   * @param load Loader called on a miss.
+   * @returns The cached or freshly loaded value.
+   */
+  private cached<T>(key: string, load: () => Promise<T>): Promise<T> {
+    return this.issueCache ? this.issueCache.get(key, load) : load();
   }
 
   /**
@@ -195,7 +208,9 @@ export class JiraClient {
    * @returns Raw comments response.
    */
   async getComments(issueKey: string): Promise<JiraCommentPage> {
-    return this.http.get<JiraCommentPage>(`${issuePath(issueKey)}/comment`, { orderBy: "created" });
+    return this.cached(`comments:${issueKey}`, () =>
+      this.http.get<JiraCommentPage>(`${issuePath(issueKey)}/comment`, { orderBy: "created" })
+    );
   }
 
   /**
@@ -206,7 +221,9 @@ export class JiraClient {
    * @returns Raw comment.
    */
   async getComment(issueKey: string, commentId: string): Promise<JiraComment> {
-    return this.http.get<JiraComment>(`${issuePath(issueKey)}/comment/${encodeURIComponent(commentId)}`);
+    return this.cached(`comment:${issueKey}:${commentId}`, () =>
+      this.http.get<JiraComment>(`${issuePath(issueKey)}/comment/${encodeURIComponent(commentId)}`)
+    );
   }
 
   /**
@@ -217,6 +234,21 @@ export class JiraClient {
    * @returns The comments and how many matched in total.
    */
   async findComments(
+    issueKey: string,
+    params: { limit: number; order: "asc" | "desc"; since?: Date }
+  ): Promise<{ comments: JiraComment[]; total: number }> {
+    const key = `find-comments:${issueKey}:${params.limit}:${params.order}:${params.since?.toISOString() ?? ""}`;
+    return this.cached(key, () => this.loadComments(issueKey, params));
+  }
+
+  /**
+   * Loads the comments for findComments (uncached).
+   *
+   * @param issueKey Issue key.
+   * @param params Limit, sort order and optional lower date bound.
+   * @returns The comments and how many matched in total.
+   */
+  private async loadComments(
     issueKey: string,
     params: { limit: number; order: "asc" | "desc"; since?: Date }
   ): Promise<{ comments: JiraComment[]; total: number }> {

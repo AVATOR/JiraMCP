@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { ReferenceCache } from "./cache.js";
+import { ISSUE_CACHE_TTL_MS, ReferenceCache } from "./cache.js";
 import { ConfluenceClient } from "./confluence-client.js";
 import { AtlassianHttp } from "./http.js";
 import { JiraClient } from "./jira-client.js";
@@ -29,7 +29,28 @@ export type ServerDeps = {
   downloadDir?: string;
   // Lifetime of cached reference data (fields, projects, spaces); 0 disables the cache.
   cacheTtlMs?: number;
+  // Lifetime of cached issue and comment reads; 0 disables the cache (default 30 s).
+  issueCacheTtlMs?: number;
+  // Caches shared between servers, for a transport that creates one server per request.
+  caches?: ServerCaches;
+  // Register the attachment download tools (they write to the server's disk); default true.
+  downloads?: boolean;
 };
+
+export type ServerCaches = { reference: ReferenceCache; issue: ReferenceCache };
+
+/**
+ * Creates the caches a server reads through; share the result between servers to share the cache.
+ *
+ * @param deps Cache TTL overrides.
+ * @returns Reference and issue caches.
+ */
+export function createCaches(deps: Pick<ServerDeps, "cacheTtlMs" | "issueCacheTtlMs"> = {}): ServerCaches {
+  return {
+    reference: new ReferenceCache(deps.cacheTtlMs),
+    issue: new ReferenceCache(deps.issueCacheTtlMs ?? ISSUE_CACHE_TTL_MS)
+  };
+}
 
 /**
  * Creates the MCP server with every read-only Jira and Confluence tool registered.
@@ -40,9 +61,9 @@ export type ServerDeps = {
  */
 export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): McpServer {
   const http = new AtlassianHttp(config, deps.fetch);
-  const cache = new ReferenceCache(deps.cacheTtlMs);
-  const jira = new JiraClient(http, cache, config);
-  const confluence = new ConfluenceClient(http, cache);
+  const caches = deps.caches ?? createCaches(deps);
+  const jira = new JiraClient(http, caches.reference, config, caches.issue);
+  const confluence = new ConfluenceClient(http, caches.reference);
   const downloadDir =
     deps.downloadDir ?? (process.env.JIRA_ATTACHMENT_DIR?.trim() || path.join(os.tmpdir(), "jira-attachments"));
 
@@ -57,7 +78,10 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
 
   registerJiraTools(server, jira);
   registerConfluenceTools(server, confluence);
-  registerAttachmentTools(server, jira, confluence, downloadDir);
+
+  if (deps.downloads !== false) {
+    registerAttachmentTools(server, jira, confluence, downloadDir);
+  }
 
   return server;
 }
