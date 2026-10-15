@@ -5,7 +5,15 @@ import { existsSync } from "node:fs";
 import path from "node:path";
 import { parseAllowlist } from "./access.js";
 import { startHttpServer } from "./http-server.js";
-import { createCaches, createServer, parseCustomFields, projectRoot, type JiraClientConfig } from "./server.js";
+import { Metrics } from "./metrics.js";
+import {
+  createCaches,
+  createServer,
+  packageVersion,
+  parseCustomFields,
+  projectRoot,
+  type JiraClientConfig
+} from "./server.js";
 
 // Each project can carry its own .env in the directory the server is started from; only
 // when there is none, the .env next to the MCP code (dist/ or src/ -> ..) is used. The
@@ -108,12 +116,15 @@ async function main() {
 
     // One cache for all requests; downloads write to the server's disk, so they stay off.
     const caches = createCaches({ issueCacheTtlMs });
+    const metrics = new Metrics();
     const running = await startHttpServer({
+      metrics,
+      version: packageVersion,
       host,
       port,
       token: process.env.MCP_HTTP_TOKEN?.trim() || undefined,
       rateLimitPerMinute: getCountEnv("MCP_HTTP_RATE_LIMIT"),
-      createServer: () => createServer(config, { caches, downloads: false, debugLog })
+      createServer: () => createServer(config, { caches, downloads: false, debugLog, metrics })
     });
     console.error(`jira-readonly-mcp listening on http://${host}:${running.port}/mcp`);
     return;

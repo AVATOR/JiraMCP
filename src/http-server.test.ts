@@ -4,6 +4,7 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { RateLimiter, startHttpServer, type RunningHttpServer } from "./http-server.js";
+import { Metrics } from "./metrics.js";
 import { createCaches, createServer } from "./server.js";
 
 const config = {
@@ -13,13 +14,16 @@ const config = {
   customFields: []
 };
 
-async function start(options: { token?: string; host?: string; rateLimitPerMinute?: number } = {}) {
+async function start(
+  options: { token?: string; host?: string; rateLimitPerMinute?: number; metrics?: Metrics; status?: number } = {}
+) {
   const calls: URL[] = [];
   const fetchImpl = ((input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : input);
     calls.push(url);
     return Promise.resolve(
       new Response(JSON.stringify({ key: "ABC-1", fields: { summary: "Over HTTP" } }), {
+        status: options.status ?? 200,
         headers: { "content-type": "application/json" }
       })
     );
@@ -30,7 +34,9 @@ async function start(options: { token?: string; host?: string; rateLimitPerMinut
     port: 0,
     token: options.token,
     rateLimitPerMinute: options.rateLimitPerMinute,
-    createServer: () => createServer(config, { fetch: fetchImpl, caches, downloads: false })
+    metrics: options.metrics,
+    version: "9.9.9",
+    createServer: () => createServer(config, { fetch: fetchImpl, caches, downloads: false, metrics: options.metrics })
   });
   return { running, calls, url: `http://127.0.0.1:${running.port}/mcp` };
 }
@@ -166,4 +172,81 @@ test("requests above the rate limit get 429 with Retry-After, the health check i
   } finally {
     await running.close();
   }
+});
+
+test("/health reports the version, and /metrics counts requests, rate limiting and Atlassian calls", async () => {
+  const metrics = new Metrics();
+  const { running, url } = await start({ metrics, rateLimitPerMinute: 3 });
+
+  try {
+    const health = await (await fetch(url.replace("/mcp", "/health"))).json();
+    assert.equal(health.status, "ok");
+    assert.equal(health.version, "9.9.9");
+    assert.equal(typeof health.uptimeSeconds, "number");
+
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+    const call = JSON.stringify({
+      jsonrpc: "2.0",
+      id: 1,
+      method: "tools/call",
+      params: { name: "jira_get_issue", arguments: { issueKey: "ABC-1" } }
+    });
+
+    assert.equal((await fetch(url, { method: "POST", headers, body: call })).status, 200);
+    assert.equal((await fetch(url, { method: "GET" })).status, 405);
+    assert.equal((await fetch(url, { method: "POST", headers, body: call })).status, 200);
+    assert.equal((await fetch(url, { method: "POST", headers, body: call })).status, 429);
+
+    const text = await (await fetch(url.replace("/mcp", "/metrics"))).text();
+    assert.match(text, /jira_mcp_info\{version="9.9.9"\} 1/);
+    assert.match(text, /jira_mcp_http_requests_total\{status="200"\} 2/);
+    assert.match(text, /jira_mcp_http_requests_total\{status="405"\} 1/);
+    assert.match(text, /jira_mcp_http_requests_total\{status="429"\} 1/);
+    assert.match(text, /^jira_mcp_rate_limited_total 1$/m);
+    assert.match(text, /jira_mcp_atlassian_requests_total\{status="200"\} 1/);
+    assert.match(text, /^jira_mcp_atlassian_retries_total 0$/m);
+    assert.match(text, /# TYPE jira_mcp_http_requests_total counter/);
+  } finally {
+    await running.close();
+  }
+});
+
+test("/metrics needs the token when one is set and does not exist without metrics", async () => {
+  const withToken = await start({ metrics: new Metrics(), token: "t0ken" });
+
+  try {
+    const metricsUrl = withToken.url.replace("/mcp", "/metrics");
+    assert.equal((await fetch(metricsUrl)).status, 401);
+    assert.equal((await fetch(metricsUrl, { headers: { authorization: "Bearer t0ken" } })).status, 200);
+    assert.equal((await fetch(withToken.url.replace("/mcp", "/health"))).status, 200);
+  } finally {
+    await withToken.running.close();
+  }
+
+  const without = await start();
+
+  try {
+    assert.equal((await fetch(without.url.replace("/mcp", "/metrics"))).status, 404);
+  } finally {
+    await without.running.close();
+  }
+});
+
+test("Metrics counts retries and failures apart from answers", () => {
+  let now = 0;
+  const metrics = new Metrics(() => now);
+
+  metrics.countUpstream({ outcome: "429", retry: false, durationMs: 500 });
+  metrics.countUpstream({ outcome: "200", retry: true, durationMs: 1500 });
+  metrics.countUpstream({ outcome: "error", retry: false, durationMs: 0 });
+  now = 90_000;
+
+  const text = metrics.render("1.0.0");
+
+  assert.match(text, /jira_mcp_atlassian_requests_total\{status="200"\} 1/);
+  assert.match(text, /jira_mcp_atlassian_requests_total\{status="429"\} 1/);
+  assert.match(text, /jira_mcp_atlassian_requests_total\{status="error"\} 1/);
+  assert.match(text, /^jira_mcp_atlassian_retries_total 1$/m);
+  assert.match(text, /^jira_mcp_atlassian_request_seconds_total 2$/m);
+  assert.match(text, /^jira_mcp_uptime_seconds 90$/m);
 });

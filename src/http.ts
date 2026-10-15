@@ -1,3 +1,4 @@
+import type { UpstreamEvent } from "./metrics.js";
 import { createWriteStream } from "node:fs";
 import { unlink } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
@@ -72,7 +73,8 @@ export class AtlassianHttp {
   constructor(
     config: HttpConfig,
     private readonly fetchImpl: typeof fetch = fetch,
-    private readonly debugLog?: (line: string) => void
+    private readonly debugLog?: (line: string) => void,
+    private readonly observe?: (event: UpstreamEvent) => void
   ) {
     const problem = baseUrlProblem(config.baseUrl);
     if (problem) {
@@ -124,10 +126,12 @@ export class AtlassianHttp {
         });
       } catch (error) {
         this.log(method, url, `failed: ${error instanceof Error ? error.message : String(error)}`, started, attempt);
+        this.observe?.({ outcome: "error", retry: attempt > 0, durationMs: Date.now() - started });
         throw error;
       }
 
       this.log(method, url, String(response.status), started, attempt);
+      this.observe?.({ outcome: String(response.status), retry: attempt > 0, durationMs: Date.now() - started });
 
       if (RETRY_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
         const delay = retryDelayMs(response, attempt);

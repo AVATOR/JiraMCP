@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- HTTP transport: `GET /health` (status, version, uptime) and `GET /metrics` (Prometheus counters for requests,
+  rate limiting, Atlassian calls and retries).
+
 ## 0.3.0
 
 ### Added

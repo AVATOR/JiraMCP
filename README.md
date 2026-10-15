@@ -171,7 +171,8 @@ Clients then connect to `http://<host>:3000/mcp` and send `Authorization: Bearer
 - `MCP_HTTP_HOST` (default `127.0.0.1`) and `MCP_HTTP_PORT` (default `3000`) set the address.
   Listening beyond loopback requires `MCP_HTTP_TOKEN`; the server refuses to start otherwise,
   because every caller reads Jira with the configured account.
-- Stateless: `POST /mcp` only (GET answers 405), `GET /healthz` for health checks. Put it behind
+- Stateless: `POST /mcp` only (GET answers 405). `GET /healthz` answers `ok` and `GET /health` answers
+  `{status, version, uptimeSeconds}`, both without a token, for health checks. Put it behind
   TLS (a reverse proxy) when it leaves your machine; the token travels in a header.
 - The attachment download tools are not registered in this mode, since they would write to the
   server's disk. `jira_list_attachments` and `confluence_list_attachments` still work.
@@ -180,6 +181,10 @@ Clients then connect to `http://<host>:3000/mcp` and send `Authorization: Bearer
   disables). Excess requests get `429` with `Retry-After`. All callers use one Atlassian quota,
   so one runaway agent cannot starve the rest. Behind a reverse proxy every request shares the
   proxy's address, so the limit then applies to the whole team.
+- `GET /metrics` serves counters in the Prometheus text format (needs the token when one is set):
+  `jira_mcp_http_requests_total{status}`, `jira_mcp_rate_limited_total`,
+  `jira_mcp_atlassian_requests_total{status}` (retries included, `error` when there was no answer),
+  `jira_mcp_atlassian_retries_total`, `jira_mcp_atlassian_request_seconds_total`, uptime and version.
 
 For local development from a checkout:
 
