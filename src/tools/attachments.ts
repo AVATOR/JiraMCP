@@ -1,5 +1,5 @@
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { mkdir, readFile, stat } from "node:fs/promises";
+import { mkdir, readFile, realpath, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { z } from "zod";
@@ -23,6 +23,63 @@ export function sanitizeFileName(name: string): string {
 }
 
 /**
+ * Extra directories downloads may be saved into, from JIRA_ATTACHMENT_ROOTS (separated like PATH).
+ *
+ * @returns Absolute directory paths; empty when the variable is not set.
+ */
+function allowedRoots(): string[] {
+  return (process.env.JIRA_ATTACHMENT_ROOTS ?? "")
+    .split(path.delimiter)
+    .map((entry) => entry.trim())
+    .filter(Boolean)
+    .map((entry) => path.resolve(entry.replace(/^~(?=$|[\\/])/, os.homedir())));
+}
+
+/**
+ * Resolves symlinks in the deepest part of a path that exists, so a link cannot lead out of a root.
+ *
+ * @param target Absolute path that may not exist yet.
+ * @returns The path with its existing ancestors resolved.
+ */
+async function realPathOfExisting(target: string): Promise<string> {
+  const missing: string[] = [];
+  let current = target;
+  for (;;) {
+    try {
+      return path.join(await realpath(current), ...missing.reverse());
+    } catch {
+      const parent = path.dirname(current);
+      if (parent === current) {
+        return target;
+      }
+      missing.push(path.basename(current));
+      current = parent;
+    }
+  }
+}
+
+/**
+ * Refuses a save location outside the download directory and the configured roots. Attachment
+ * content is untrusted, so a prompt-injected path must not be able to drop a file into e.g. ~/.config.
+ *
+ * @param target Absolute path the file would be written to.
+ * @param roots Directories saving is allowed in.
+ */
+async function assertInsideRoots(target: string, roots: string[]) {
+  const real = await realPathOfExisting(target);
+  for (const root of roots) {
+    const relative = path.relative(await realPathOfExisting(root), real);
+    if (relative && !relative.startsWith("..") && !path.isAbsolute(relative)) {
+      return;
+    }
+  }
+
+  throw new Error(
+    `outputPath must be inside the download directory (${roots[0]}) or a directory listed in JIRA_ATTACHMENT_ROOTS`
+  );
+}
+
+/**
  * Streams a file to disk through the given download and builds the tool result, inlining images that are small enough.
  *
  * @param file The attachment's identity and the mime type its metadata announced.
@@ -40,12 +97,14 @@ async function saveDownload(
   let target = path.join(options.downloadDir, fileName);
 
   if (options.outputPath) {
-    const resolved = path.resolve(options.outputPath.replace(/^~(?=$|[\\/])/, os.homedir()));
+    const roots = [options.downloadDir, ...allowedRoots()];
+    const resolved = path.resolve(options.downloadDir, options.outputPath.replace(/^~(?=$|[\\/])/, os.homedir()));
     const isDir = await stat(resolved).then(
       (entry) => entry.isDirectory(),
       () => false
     );
     target = isDir ? path.join(resolved, fileName) : resolved;
+    await assertInsideRoots(target, roots);
   }
 
   await mkdir(path.dirname(target), { recursive: true });
@@ -80,8 +139,8 @@ const outputPathParam = z
   .string()
   .optional()
   .describe(
-    "File or existing directory to save into; defaults to JIRA_ATTACHMENT_DIR or the system temp dir. " +
-      "Existing files are never overwritten."
+    "File or existing directory to save into; must be inside JIRA_ATTACHMENT_DIR (or the system temp dir) or a " +
+      "directory from JIRA_ATTACHMENT_ROOTS, relative paths resolve there. Existing files are never overwritten."
   );
 const inlineParam = z
   .boolean()
