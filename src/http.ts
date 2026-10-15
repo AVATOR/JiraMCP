@@ -3,7 +3,7 @@ import { unlink } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
-import { basicAuthHeader } from "./auth.js";
+import { baseUrlProblem, basicAuthHeader } from "./auth.js";
 import type { JsonValue } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
@@ -70,6 +70,11 @@ export class AtlassianHttp {
     config: HttpConfig,
     private readonly fetchImpl: typeof fetch = fetch
   ) {
+    const problem = baseUrlProblem(config.baseUrl);
+    if (problem) {
+      throw new Error(problem);
+    }
+
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.authHeader = basicAuthHeader(config.email, config.apiToken);
   }
