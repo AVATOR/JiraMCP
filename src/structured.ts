@@ -27,6 +27,7 @@ import type {
   JiraIssue,
   JiraIssueLink,
   JiraIssueRef,
+  JiraIssueGraph,
   JiraProject,
   JiraProjectDetail,
   JiraReferenceItem,
@@ -903,3 +904,48 @@ export const downloadOutput = {
   bytes: z.number(),
   inlined: z.boolean()
 };
+
+export const spaceTreeOutput = {
+  ...untrustedFlag,
+  spaceKey: z.string(),
+  truncated: z.boolean(),
+  hidden: z.number(),
+  pages: z.array(z.object({ id: z.string(), title: str, parentId: str, depth: z.number() }))
+};
+
+export const pageDiffOutput = {
+  ...untrustedFlag,
+  pageId: z.string(),
+  title: str,
+  fromVersion: z.number(),
+  toVersion: z.number(),
+  added: z.number(),
+  removed: z.number(),
+  diff: z.string()
+};
+export const issueGraphOutput = {
+  ...untrustedFlag,
+  root: z.string(),
+  truncated: z.boolean(),
+  nodes: z.array(
+    z.object({
+      key: z.string(),
+      summary: str,
+      status: str,
+      type: str,
+      depth: z.number(),
+      unavailable: z.boolean().optional()
+    })
+  ),
+  edges: z.array(z.object({ from: z.string(), label: z.string(), to: z.string() }))
+};
+
+/**
+ * Structured form of jira_get_issue_links.
+ *
+ * @param graph Result of the link walk.
+ * @returns Object matching issueGraphOutput.
+ */
+export function issueGraphData(graph: JiraIssueGraph): z.infer<z.ZodObject<typeof issueGraphOutput>> {
+  return { root: graph.root, truncated: graph.truncated, nodes: graph.nodes, edges: graph.edges };
+}

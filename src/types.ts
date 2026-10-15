@@ -57,7 +57,29 @@ export type JiraCommentPage = {
 
 export type JiraIssueRef = {
   key?: string;
-  fields?: { summary?: string; status?: JiraNamed };
+  fields?: { summary?: string; status?: JiraNamed; issuetype?: JiraNamed };
+};
+
+export type JiraGraphNode = {
+  key: string;
+  summary?: string;
+  status?: string;
+  type?: string;
+  // Distance from the issue the graph starts at.
+  depth: number;
+  // The issue could not be read (no access or gone), so its own links are unknown.
+  unavailable?: boolean;
+};
+
+export type JiraGraphEdge = { from: string; label: string; to: string };
+
+export type JiraIssueGraph = {
+  root: string;
+  nodes: JiraGraphNode[];
+  edges: JiraGraphEdge[];
+  depth: number;
+  // Set when the node limit stopped the walk before every reachable issue was visited.
+  truncated: boolean;
 };
 
 export type JiraIssueLink = {
@@ -144,7 +166,7 @@ export type ConfluencePageSummary = {
   id?: string;
   title?: string;
   parentId?: string;
-  version?: { number?: number; createdAt?: string };
+  version?: { number?: number; createdAt?: string; authorId?: string; message?: string };
 };
 
 export type ConfluenceSpacePages = {
