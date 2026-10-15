@@ -144,7 +144,7 @@ export type ConfluencePageSummary = {
   id?: string;
   title?: string;
   parentId?: string;
-  version?: { number?: number; createdAt?: string };
+  version?: { number?: number; createdAt?: string; authorId?: string; message?: string };
 };
 
 export type ConfluenceSpacePages = {

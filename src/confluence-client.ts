@@ -9,6 +9,7 @@ import type {
   ConfluenceChildren,
   ConfluenceComments,
   ConfluencePage,
+  ConfluencePageSummary,
   ConfluenceSearchResult,
   ConfluenceSpace,
   ConfluenceSpaceList,
@@ -296,11 +297,14 @@ export class ConfluenceClient {
   /**
    * The v2 pages endpoint only filters by exact title, so fuzzy and full-text search go through v1 CQL.
    *
-   * @param params Query text, limit, optional space and title-only restriction, and page cursor.
+   * @param params Query text, labels (all must be present), contributor account id, limit, optional space and
+   *   title-only restriction, and page cursor.
    * @returns Raw v1 search response.
    */
   async searchPages(params: {
-    query: string;
+    query?: string;
+    labels?: string[];
+    contributor?: string;
     limit: number;
     spaceKey?: string;
     titleOnly?: boolean;
@@ -310,9 +314,18 @@ export class ConfluenceClient {
       this.guardSpace(params.spaceKey);
     }
 
+    const labels = (params.labels ?? []).map((label) => label.trim()).filter(Boolean);
+    const text = params.query?.trim();
+
+    if (!text && !labels.length && !params.contributor) {
+      throw new Error("Give a query, labels or a contributor to search for");
+    }
+
     const clauses = [
       "type = page",
-      `${params.titleOnly ? "title" : "text"} ~ ${cqlSearchString(params.query)}`,
+      ...(text ? [`${params.titleOnly ? "title" : "text"} ~ ${cqlSearchString(text)}`] : []),
+      ...labels.map((label) => `label = ${jqlString(label)}`),
+      ...(params.contributor ? [`contributor = ${jqlString(params.contributor)}`] : []),
       ...(params.spaceKey ? [`space = ${jqlString(params.spaceKey)}`] : []),
       ...(this.allowedSpaces ? [`space in (${this.allowedSpaces.map(jqlString).join(", ")})`] : [])
     ];
@@ -383,5 +396,52 @@ export class ConfluenceClient {
     }
 
     return this.http.get<ConfluenceSpacePages>(`/wiki/api/v2/spaces/${encodeURIComponent(spaceId)}/pages`, query);
+  }
+
+  /**
+   * Reads the pages of a space page by page until `maxPages` are collected, for building a page tree.
+   *
+   * @param spaceKey Space key.
+   * @param maxPages Stop after this many pages.
+   * @returns The pages with their parent ids, and whether more exist.
+   */
+  async getSpaceTree(
+    spaceKey: string,
+    maxPages: number
+  ): Promise<{ pages: ConfluencePageSummary[]; truncated: boolean }> {
+    const pages: ConfluencePageSummary[] = [];
+    let cursor: string | undefined;
+
+    for (;;) {
+      const result = await this.getSpacePages(spaceKey, Math.min(250, maxPages - pages.length), cursor);
+      pages.push(...(result?.results ?? []));
+      const next = nextCursor(result?._links) ?? undefined;
+
+      if (!next) {
+        return { pages, truncated: false };
+      }
+
+      if (pages.length >= maxPages) {
+        return { pages, truncated: true };
+      }
+
+      cursor = next;
+    }
+  }
+
+  /**
+   * Fetches one historical version of a page with its body in storage format.
+   *
+   * @param pageId Page id.
+   * @param version Version number.
+   * @returns The page as it was in that version.
+   */
+  async getPageVersion(pageId: string, version: number): Promise<ConfluencePage> {
+    const page = await this.http.get<ConfluencePage>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
+      "body-format": "storage",
+      version: String(version)
+    });
+    await this.guardSpaceId(page?.spaceId, `Page ${pageId}`);
+    return page;
   }
 }

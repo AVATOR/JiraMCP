@@ -214,6 +214,8 @@ npm run setup    # run the setup wizard from source
 - `jira_list_sprints`
 - `jira_get_sprint_issues`
 - `confluence_get_page`
+- `confluence_get_page_diff`
+- `confluence_get_space_tree`
 - `confluence_get_page_children`
 - `confluence_get_page_comments`
 - `confluence_list_attachments`

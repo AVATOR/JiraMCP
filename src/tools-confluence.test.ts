@@ -283,3 +283,106 @@ test("confluence_download_attachment refuses oversized files before downloading"
   assert.match(text, /above the 104857600-byte limit/);
   assert.equal(calls.length, 1);
 });
+
+test("confluence_search_pages filters by labels and contributor and needs something to search for", async () => {
+  const { client, calls } = await connect({
+    "/wiki/rest/api/search": () => json({ totalSize: 0, results: [] })
+  });
+
+  await call(client, "confluence_search_pages", { labels: ["adr", "approved"], contributor: "acc-1", spaceKey: "ENG" });
+
+  const cql = calls[0].url.searchParams.get("cql");
+  assert.equal(
+    cql,
+    'type = page AND label = "adr" AND label = "approved" AND contributor = "acc-1" AND space = "ENG" ORDER BY lastmodified DESC'
+  );
+
+  const empty = await call(client, "confluence_search_pages", {});
+  assert.equal(empty.result.isError, true);
+  assert.match(empty.text, /query, labels or a contributor/);
+});
+
+test("confluence_get_space_tree builds the hierarchy from parent ids, limited by depth", async () => {
+  const pages = [
+    { id: "1", title: "Home" },
+    { id: "2", title: "Guides", parentId: "1" },
+    { id: "3", title: "Setup", parentId: "2" },
+    { id: "4", title: "Advanced", parentId: "3" },
+    { id: "5", title: "Orphan", parentId: "999" }
+  ];
+  const { client } = await connect({
+    "/wiki/api/v2/spaces": () => json({ results: [{ id: "10", key: "ENG" }] }),
+    "/wiki/api/v2/spaces/10/pages": () => json({ results: pages })
+  });
+
+  const { text, result } = await call(client, "confluence_get_space_tree", { spaceKey: "ENG", depth: 3 });
+
+  assert.match(text, /ENG — 4 pages in the tree/);
+  assert.match(text, /- Home \(1\)\n {2}- Guides \(2\)\n {4}- Setup \(3\)/);
+  assert.match(text, /- Orphan \(5\)/);
+  assert.match(text, /1 deeper pages are hidden/);
+  assert.doesNotMatch(text, /Advanced/);
+  assert.equal(result.structuredContent.hidden, 1);
+});
+
+test("confluence_get_space_tree follows cursors up to maxPages", async () => {
+  const { client, calls } = await connect({
+    "/wiki/api/v2/spaces": () => json({ results: [{ id: "10", key: "ENG" }] }),
+    "/wiki/api/v2/spaces/10/pages": (url) =>
+      url.searchParams.get("cursor")
+        ? json({ results: [{ id: "3", title: "C" }] })
+        : json({
+            results: [
+              { id: "1", title: "A" },
+              { id: "2", title: "B" }
+            ],
+            _links: { next: "/wiki/api/v2/spaces/10/pages?cursor=next1" }
+          })
+  });
+
+  const all = await call(client, "confluence_get_space_tree", { spaceKey: "ENG" });
+  assert.match(all.text, /3 pages in the tree/);
+  assert.equal(calls.filter((entry) => entry.url.pathname === "/wiki/api/v2/spaces/10/pages").length, 2);
+
+  const cut = await call(client, "confluence_get_space_tree", { spaceKey: "ENG", maxPages: 2 });
+  assert.match(cut.text, /more pages than maxPages/);
+});
+
+test("confluence_get_page_diff compares the latest version with the previous one", async () => {
+  const body = (text: string) => ({ storage: { value: text } });
+  const { client, calls } = await connect({
+    "/wiki/api/v2/pages/42": (url) => {
+      const version = url.searchParams.get("version");
+      return json(
+        version === "2"
+          ? {
+              id: "42",
+              title: "Plan",
+              spaceId: "1",
+              version: { number: 2 },
+              body: body("<p>one</p><p>two</p><p>four</p>")
+            }
+          : {
+              id: "42",
+              title: "Plan",
+              spaceId: "1",
+              version: { number: 3, createdAt: "2026-10-05T10:00:00Z", authorId: "acc-9", message: "Fix typo" },
+              body: body("<p>one</p><p>three</p><p>four</p><p>five</p>")
+            }
+      );
+    }
+  });
+
+  const { text, result } = await call(client, "confluence_get_page_diff", { pageId: "42" });
+
+  assert.match(text, /Plan \(42\): v2 → v3 \(2026-10-05, acc-9\) — \+3 −1 lines/);
+  assert.match(text, /Change message: Fix typo/);
+  assert.match(text, /^-two$/m);
+  assert.match(text, /^\+three$/m);
+  assert.match(text, /^\+five$/m);
+  assert.equal(result.structuredContent.added, 3);
+  assert.equal(calls.filter((entry) => entry.url.searchParams.get("version") === "2").length, 1);
+
+  const bad = await call(client, "confluence_get_page_diff", { pageId: "42", fromVersion: 3, toVersion: 3 });
+  assert.equal(bad.result.isError, true);
+});

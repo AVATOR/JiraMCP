@@ -903,3 +903,22 @@ export const downloadOutput = {
   bytes: z.number(),
   inlined: z.boolean()
 };
+
+export const spaceTreeOutput = {
+  ...untrustedFlag,
+  spaceKey: z.string(),
+  truncated: z.boolean(),
+  hidden: z.number(),
+  pages: z.array(z.object({ id: z.string(), title: str, parentId: str, depth: z.number() }))
+};
+
+export const pageDiffOutput = {
+  ...untrustedFlag,
+  pageId: z.string(),
+  title: str,
+  fromVersion: z.number(),
+  toVersion: z.number(),
+  added: z.number(),
+  removed: z.number(),
+  diff: z.string()
+};

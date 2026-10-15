@@ -272,3 +272,87 @@ export function formatConfluenceVersions(
 
   return lines.join("\n");
 }
+
+export type TreeNode = { id: string; title?: string; parentId?: string; depth: number };
+
+/**
+ * Arranges pages as a tree by their parent ids; pages whose parent is not in the list become roots.
+ *
+ * @param pages Pages of a space with their parent ids.
+ * @param maxDepth Deepest level to keep (1 = roots only).
+ * @returns Nodes in tree order, each with its depth, and how many were left out by the depth limit.
+ */
+export function buildPageTree(
+  pages: { id?: string; title?: string; parentId?: string }[],
+  maxDepth: number
+): { nodes: TreeNode[]; hidden: number } {
+  const byId = new Map(pages.filter((page) => page.id).map((page) => [page.id as string, page]));
+  const children = new Map<string, typeof pages>();
+  const roots: typeof pages = [];
+
+  for (const page of byId.values()) {
+    const parent = page.parentId && page.parentId !== page.id && byId.has(page.parentId) ? page.parentId : undefined;
+
+    if (parent) {
+      children.set(parent, [...(children.get(parent) ?? []), page]);
+    } else {
+      roots.push(page);
+    }
+  }
+
+  const nodes: TreeNode[] = [];
+  const seen = new Set<string>();
+  let hidden = 0;
+  const byTitle = (a: { title?: string }, b: { title?: string }) => (a.title ?? "").localeCompare(b.title ?? "");
+
+  const walk = (page: (typeof pages)[number], depth: number) => {
+    const id = page.id as string;
+
+    // A cycle in parent ids would never end; each page is shown once.
+    if (seen.has(id)) {
+      return;
+    }
+    seen.add(id);
+
+    if (depth > maxDepth) {
+      hidden++;
+    } else {
+      nodes.push({ id, title: page.title, parentId: page.parentId, depth });
+    }
+
+    for (const child of (children.get(id) ?? []).sort(byTitle)) {
+      walk(child, depth + 1);
+    }
+  };
+
+  for (const root of roots.sort(byTitle)) {
+    walk(root, 1);
+  }
+
+  return { nodes, hidden };
+}
+
+/**
+ * Renders a page tree as an indented list.
+ *
+ * @param tree Result of buildPageTree.
+ * @param view Space key and whether the page listing was cut short.
+ * @returns Markdown list with page ids.
+ */
+export function formatConfluenceTree(
+  tree: { nodes: TreeNode[]; hidden: number },
+  view: { spaceKey: string; truncated: boolean }
+): string {
+  const lines = [`${view.spaceKey} — ${tree.nodes.length} pages in the tree`];
+
+  if (view.truncated) {
+    lines.push("(The space has more pages than maxPages: raise it to see the rest.)");
+  }
+
+  if (tree.hidden) {
+    lines.push(`(${tree.hidden} deeper pages are hidden by depth: raise depth to see them.)`);
+  }
+
+  lines.push("", ...tree.nodes.map((node) => `${"  ".repeat(node.depth - 1)}- ${node.title ?? ""} (${node.id})`));
+  return lines.join("\n");
+}
