@@ -7,6 +7,7 @@ import { ISSUE_CACHE_TTL_MS, ReferenceCache } from "./cache.js";
 import { ConfluenceClient } from "./confluence-client.js";
 import { AtlassianHttp } from "./http.js";
 import { JiraClient } from "./jira-client.js";
+import type { Metrics } from "./metrics.js";
 import { registerPrompts, registerResources } from "./resources.js";
 import { registerAttachmentTools } from "./tools/attachments.js";
 import { registerConfluenceTools } from "./tools/confluence.js";
@@ -24,7 +25,7 @@ export type { JiraClientConfig } from "./types.js";
 export const projectRoot = path.join(path.dirname(fileURLToPath(import.meta.url)), "..");
 
 // Same root for dist/ and src/ (tsx), and package.json ships with the npm package.
-const packageVersion: string = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
+export const packageVersion: string = JSON.parse(readFileSync(path.join(projectRoot, "package.json"), "utf8")).version;
 
 // Injection points for tests; production uses the global fetch and the env/temp download dir.
 export type ServerDeps = {
@@ -40,6 +41,8 @@ export type ServerDeps = {
   downloads?: boolean;
   // Receives one line per Atlassian request (see JIRA_MCP_DEBUG); never includes credentials.
   debugLog?: (line: string) => void;
+  // Counts every request to Atlassian (see the HTTP transport's /metrics).
+  metrics?: Pick<Metrics, "countUpstream">;
 };
 
 export type ServerCaches = { reference: ReferenceCache; issue: ReferenceCache };
@@ -65,7 +68,12 @@ export function createCaches(deps: Pick<ServerDeps, "cacheTtlMs" | "issueCacheTt
  * @returns MCP server with all tools registered, not yet connected.
  */
 export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): McpServer {
-  const http = new AtlassianHttp(config, deps.fetch, deps.debugLog);
+  const http = new AtlassianHttp(
+    config,
+    deps.fetch,
+    deps.debugLog,
+    deps.metrics && ((event) => deps.metrics?.countUpstream(event))
+  );
   const caches = deps.caches ?? createCaches(deps);
   const jira = new JiraClient(http, caches.reference, config, caches.issue);
   const confluence = new ConfluenceClient(http, caches.reference, config.allowedSpaces);

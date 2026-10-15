@@ -7,9 +7,12 @@ import { createServer as createHttpServer, type IncomingMessage, type Server, ty
 import type { AddressInfo } from "node:net";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { Metrics } from "./metrics.js";
 
 const MCP_PATH = "/mcp";
 const HEALTH_PATH = "/healthz";
+const STATUS_PATH = "/health";
+const METRICS_PATH = "/metrics";
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
 const RATE_WINDOW_MS = 60_000;
@@ -27,6 +30,10 @@ export type HttpServerOptions = {
   rateLimitPerMinute?: number;
   // Clock, replaceable in tests.
   now?: () => number;
+  // Request counters; with them /metrics is served (behind the token, when one is set).
+  metrics?: Metrics;
+  // Reported by /health and /metrics.
+  version?: string;
 };
 
 export type RunningHttpServer = {
@@ -191,9 +198,31 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
           return void res.end("ok");
         }
 
+        if (url.pathname === STATUS_PATH) {
+          res.writeHead(200, { "Content-Type": "application/json" });
+          return void res.end(
+            JSON.stringify({
+              status: "ok",
+              version: options.version ?? "unknown",
+              uptimeSeconds: options.metrics?.uptimeSeconds()
+            })
+          );
+        }
+
+        if (url.pathname === METRICS_PATH && options.metrics) {
+          if (options.token && !hasToken(req.headers.authorization, options.token)) {
+            return sendError(res, 401, "Unauthorized", { "WWW-Authenticate": "Bearer" });
+          }
+
+          res.writeHead(200, { "Content-Type": "text/plain; version=0.0.4" });
+          return void res.end(options.metrics.render(options.version ?? "unknown"));
+        }
+
         if (url.pathname !== MCP_PATH) {
           return sendError(res, 404, "Not found");
         }
+
+        res.on("finish", () => options.metrics?.countMcpRequest(res.statusCode));
 
         // A loopback server must not be reachable through a rebound DNS name.
         const hostName = (req.headers.host ?? "").replace(/:\d+$/, "").toLowerCase();
@@ -208,6 +237,7 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
         // After authentication, so unauthenticated traffic cannot use up anyone's allowance.
         const retryAfter = limiter.hit(req.socket.remoteAddress ?? "unknown");
         if (retryAfter > 0) {
+          options.metrics?.countRateLimited();
           return sendError(res, 429, "Too many requests", { "Retry-After": String(retryAfter) });
         }
 

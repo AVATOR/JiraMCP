@@ -4,6 +4,8 @@
 
 ### Added
 
+- HTTP transport: `GET /health` (status, version, uptime) and `GET /metrics` (Prometheus counters for requests,
+  rate limiting, Atlassian calls and retries).
 - `confluence_get_space_tree` (page hierarchy of a space in one call) and `confluence_get_page_diff` (line diff
   between two versions of a page).
 - `confluence_search_pages` takes `labels` and `contributor`, and `query` is optional when one of them is given.
