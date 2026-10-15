@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `jira_get_issue_context`: an issue with its newest comments, recent history, remote links and excerpts of the
+  Confluence pages it links to, in one call.
+
 ## 0.3.0
 
 ### Added

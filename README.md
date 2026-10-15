@@ -193,6 +193,7 @@ npm run setup    # run the setup wizard from source
 ## MCP Tools
 
 - `jira_get_issue`
+- `jira_get_issue_context`
 - `jira_search_issues`
 - `jira_get_project_issues`
 - `jira_get_comments`

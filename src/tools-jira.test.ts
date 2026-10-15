@@ -4,7 +4,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { call, connect, downloadDir, json } from "./test-support.js";
+import { BASE_URL, call, connect, downloadDir, json } from "./test-support.js";
 
 test("lists every tool with an input schema", async () => {
   const { client } = await connect({});
@@ -26,6 +26,7 @@ test("lists every tool with an input schema", async () => {
     "jira_get_comments",
     "jira_get_current_user",
     "jira_get_issue",
+    "jira_get_issue_context",
     "jira_get_project",
     "jira_get_project_issues",
     "jira_get_remote_links",
@@ -812,4 +813,78 @@ test("long Markdown results are cut by JIRA_MAX_RESPONSE_CHARS, raw JSON is not"
       process.env.JIRA_MAX_RESPONSE_CHARS = previous;
     }
   }
+});
+
+test("jira_get_issue_context gathers the issue, comments, history, links and linked page excerpts", async () => {
+  const { client, calls } = await connect({
+    "/rest/api/3/issue/ABC-1": () =>
+      json({
+        key: "ABC-1",
+        fields: {
+          summary: "Context me",
+          status: { name: "In Progress" },
+          description: {
+            type: "doc",
+            version: 1,
+            content: [
+              {
+                type: "paragraph",
+                content: [
+                  {
+                    type: "inlineCard",
+                    attrs: { url: `${BASE_URL}/wiki/spaces/ENG/pages/555/Design` }
+                  },
+                  { type: "text", text: " and " },
+                  { type: "inlineCard", attrs: { url: "https://other.atlassian.net/wiki/spaces/X/pages/777/Foreign" } }
+                ]
+              }
+            ]
+          }
+        }
+      }),
+    "/rest/api/3/issue/ABC-1/comment": () =>
+      json({ total: 1, comments: [{ id: "10", created: "2026-10-01T10:00:00.000+0000", body: "Looks good" }] }),
+    "/rest/api/3/issue/ABC-1/changelog": () =>
+      json({
+        isLast: true,
+        values: [
+          {
+            created: "2026-10-02T10:00:00.000+0000",
+            items: [{ field: "status", fromString: "To Do", toString: "In Progress" }]
+          }
+        ]
+      }),
+    "/rest/api/3/issue/ABC-1/remotelink": () =>
+      json([
+        {
+          object: { url: `${BASE_URL}/wiki/spaces/ENG/pages/888/Notes`, title: "Notes" },
+          relationship: "mentioned in"
+        }
+      ]),
+    "/wiki/api/v2/pages/555": () =>
+      json({
+        id: "555",
+        title: "Design",
+        spaceId: "1",
+        body: { storage: { value: "<p>The design says hello.</p>" } },
+        _links: { webui: "/spaces/ENG/pages/555" }
+      }),
+    "/wiki/api/v2/pages/888": () => json({ message: "gone" }, { status: 404 })
+  });
+
+  const { result, text } = await call(client, "jira_get_issue_context", { issueKey: "ABC-1" });
+
+  assert.match(text, /Context me/);
+  assert.match(text, /## Comments[\s\S]*Looks good/);
+  assert.match(text, /## History[\s\S]*In Progress/);
+  assert.match(text, /## Remote links[\s\S]*Notes/);
+  assert.match(text, /### Design \(555\)[\s\S]*The design says hello/);
+  assert.match(text, /Page 888 unavailable/);
+  assert.ok(!calls.some((entry) => entry.url.pathname.endsWith("/pages/777")), "foreign hosts are not followed");
+  assert.equal(result.structuredContent.untrusted, true);
+  assert.equal(result.structuredContent.pages.length, 1);
+
+  const lean = await call(client, "jira_get_issue_context", { issueKey: "ABC-1", include: ["history"] });
+  assert.match(lean.text, /## History/);
+  assert.doesNotMatch(lean.text, /## Comments|## Remote links|Linked Confluence pages/);
 });
