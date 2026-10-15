@@ -68,7 +68,8 @@ export class AtlassianHttp {
 
   constructor(
     config: HttpConfig,
-    private readonly fetchImpl: typeof fetch = fetch
+    private readonly fetchImpl: typeof fetch = fetch,
+    private readonly debugLog?: (line: string) => void
   ) {
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.authHeader = basicAuthHeader(config.email, config.apiToken);
@@ -94,18 +95,30 @@ export class AtlassianHttp {
    * @returns The response, after retries.
    */
   private async send(url: URL, accept: string, body?: string): Promise<Response> {
+    const method = body === undefined ? "GET" : "POST";
+
     for (let attempt = 0; ; attempt++) {
-      const response = await this.fetchImpl(url, {
-        method: body === undefined ? "GET" : "POST",
-        headers: {
-          Accept: accept,
-          Authorization: this.authHeader,
-          ...(body === undefined ? {} : { "Content-Type": "application/json" })
-        },
-        body,
-        redirect: "follow",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
-      });
+      const started = Date.now();
+      let response: Response;
+
+      try {
+        response = await this.fetchImpl(url, {
+          method,
+          headers: {
+            Accept: accept,
+            Authorization: this.authHeader,
+            ...(body === undefined ? {} : { "Content-Type": "application/json" })
+          },
+          body,
+          redirect: "follow",
+          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+        });
+      } catch (error) {
+        this.log(method, url, `failed: ${error instanceof Error ? error.message : String(error)}`, started, attempt);
+        throw error;
+      }
+
+      this.log(method, url, String(response.status), started, attempt);
 
       if (RETRY_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
         await response.body?.cancel();
@@ -115,6 +128,23 @@ export class AtlassianHttp {
 
       return response;
     }
+  }
+
+  /**
+   * Writes one debug line per request: method, path and query, outcome, duration and retry number.
+   * The Authorization header and the host are never part of it.
+   *
+   * @param method HTTP method.
+   * @param url Request URL.
+   * @param outcome Status code, or the failure message.
+   * @param started Timestamp the attempt began.
+   * @param attempt Zero-based retry number.
+   */
+  private log(method: string, url: URL, outcome: string, started: number, attempt: number): void {
+    this.debugLog?.(
+      `${method} ${url.pathname}${url.search} -> ${outcome} ${Date.now() - started}ms` +
+        (attempt > 0 ? ` (retry ${attempt})` : "")
+    );
   }
 
   /**

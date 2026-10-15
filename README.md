@@ -31,6 +31,7 @@ Optional variables:
 - `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
+- `JIRA_MCP_DEBUG` — `1` logs every Atlassian request (method, path, status, duration, retries) to stderr; credentials are never logged
 - `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
 - `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN` — Streamable HTTP, see below
 
