@@ -71,6 +71,30 @@ for (const status of [502, 504]) {
   });
 }
 
+test("debug logging records each request with status, duration and retry, without credentials", async () => {
+  const { AtlassianHttp } = await import("./http.js");
+  const lines: string[] = [];
+  let attempts = 0;
+  const fetchImpl = (() =>
+    Promise.resolve(
+      ++attempts < 2
+        ? new Response("busy", { status: 503, headers: { "retry-after": "0" } })
+        : new Response("{}", { headers: { "content-type": "application/json" } })
+    )) as typeof fetch;
+  const http = new AtlassianHttp(
+    { baseUrl: "https://example.atlassian.net", email: "me@example.com", apiToken: "s3cret" },
+    fetchImpl,
+    (line) => lines.push(line)
+  );
+
+  await http.get("/rest/api/3/myself", { expand: "groups" });
+
+  assert.equal(lines.length, 2);
+  assert.match(lines[0], /^GET \/rest\/api\/3\/myself\?expand=groups -> 503 \d+ms$/);
+  assert.match(lines[1], /-> 200 \d+ms \(retry 1\)$/);
+  assert.ok(!lines.join("\n").match(/s3cret|me@example\.com|example\.atlassian\.net/));
+});
+
 test("a retry that would pass the request deadline is not waited for", async () => {
   const { AtlassianHttp } = await import("./http.js");
   let calls = 0;

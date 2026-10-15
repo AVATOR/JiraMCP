@@ -36,6 +36,8 @@ export type ServerDeps = {
   caches?: ServerCaches;
   // Register the attachment download tools (they write to the server's disk); default true.
   downloads?: boolean;
+  // Receives one line per Atlassian request (see JIRA_MCP_DEBUG); never includes credentials.
+  debugLog?: (line: string) => void;
 };
 
 export type ServerCaches = { reference: ReferenceCache; issue: ReferenceCache };
@@ -61,7 +63,7 @@ export function createCaches(deps: Pick<ServerDeps, "cacheTtlMs" | "issueCacheTt
  * @returns MCP server with all tools registered, not yet connected.
  */
 export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): McpServer {
-  const http = new AtlassianHttp(config, deps.fetch);
+  const http = new AtlassianHttp(config, deps.fetch, deps.debugLog);
   const caches = deps.caches ?? createCaches(deps);
   const jira = new JiraClient(http, caches.reference, config, caches.issue);
   const confluence = new ConfluenceClient(http, caches.reference);

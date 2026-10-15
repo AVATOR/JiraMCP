@@ -53,6 +53,16 @@ function getSecondsEnv(name: string): number | undefined {
 }
 
 /**
+ * JIRA_MCP_DEBUG=1 (or true) logs every Atlassian request to stderr; stdout carries the MCP protocol.
+ *
+ * @returns Logger writing to stderr, or undefined when debugging is off.
+ */
+function getDebugLog(): ((line: string) => void) | undefined {
+  const flag = process.env.JIRA_MCP_DEBUG?.trim().toLowerCase();
+  return flag === "1" || flag === "true" ? (line) => console.error(`[jira-mcp] ${line}`) : undefined;
+}
+
+/**
  * Reads a non-negative integer from an environment variable.
  *
  * @param name Environment variable name.
@@ -82,6 +92,7 @@ async function main() {
     customFields: parseCustomFields(process.env.JIRA_CUSTOM_FIELDS)
   };
   const issueCacheTtlMs = getSecondsEnv("JIRA_ISSUE_CACHE_SECONDS");
+  const debugLog = getDebugLog();
   const transport = process.env.MCP_TRANSPORT?.trim().toLowerCase() || "stdio";
 
   if (transport === "http") {
@@ -99,7 +110,7 @@ async function main() {
       port,
       token: process.env.MCP_HTTP_TOKEN?.trim() || undefined,
       rateLimitPerMinute: getCountEnv("MCP_HTTP_RATE_LIMIT"),
-      createServer: () => createServer(config, { caches, downloads: false })
+      createServer: () => createServer(config, { caches, downloads: false, debugLog })
     });
     console.error(`jira-readonly-mcp listening on http://${host}:${running.port}/mcp`);
     return;
@@ -109,7 +120,7 @@ async function main() {
     throw new Error(`MCP_TRANSPORT must be "stdio" or "http", got "${transport}"`);
   }
 
-  const server = createServer(config, { issueCacheTtlMs });
+  const server = createServer(config, { issueCacheTtlMs, debugLog });
   await server.connect(new StdioServerTransport());
 }
 
