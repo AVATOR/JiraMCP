@@ -32,8 +32,10 @@ Optional variables:
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
 - `JIRA_MAX_RESPONSE_CHARS` — cap on a single Markdown result (default `60000`, `0` disables); longer results are cut with a hint on how to fetch the rest, `raw` output is never cut
+- `JIRA_MCP_DEBUG` — `1` logs every Atlassian request (method, path, status, duration, retries) to stderr; credentials are never logged
+- `JIRA_ATTACHMENT_ROOTS` — extra directories (separated like `PATH`) an explicit `outputPath` may point into; by default only `JIRA_ATTACHMENT_DIR` is allowed
 - `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
-- `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN` — Streamable HTTP, see below
+- `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN`, `MCP_HTTP_RATE_LIMIT` — Streamable HTTP, see below
 
 ### Getting a Jira API token
 
@@ -60,7 +62,8 @@ Notes:
   the token on a dedicated Atlassian account with access to just those projects.
   The server is read-only regardless, but the token itself is not.
 - `JIRA_BASE_URL` is your site root, for example `https://your-company.atlassian.net`,
-  with no `/jira` or `/browse/...` suffix.
+  with no `/jira` or `/browse/...` suffix. It must be `https://`: Basic auth sends the
+  token with every request, so plain `http://` is refused (only `localhost` is allowed, for tests).
 - Jira **Data Center / Server** (self-hosted) uses personal access tokens instead
   and is not covered by this setup.
 - Revoke a token on the same page the moment it leaks — for instance if it ends
@@ -125,6 +128,11 @@ own `package.json` is never touched.
 `npx jira-mcp-add --print` runs the same questions but prints the JSON instead
 of writing it, for pasting into a config by hand.
 
+`npx jira-mcp-add --list` shows every Jira entry found in the client config files and asks Jira
+whether its token still works (the token itself is never printed; the exit code is 1 when one was
+rejected). `npx jira-mcp-add --remove [name]` deletes an entry after confirmation, without touching
+the rest of the file.
+
 ## Run
 
 The MCP client starts the server itself, using the generated configuration. To
@@ -159,6 +167,10 @@ Clients then connect to `http://<host>:3000/mcp` and send `Authorization: Bearer
 - The attachment download tools are not registered in this mode, since they would write to the
   server's disk. `jira_list_attachments` and `confluence_list_attachments` still work.
 - The reference and issue caches are shared by all callers.
+- `MCP_HTTP_RATE_LIMIT` caps requests per minute from one client address (default `120`, `0`
+  disables). Excess requests get `429` with `Retry-After`. All callers use one Atlassian quota,
+  so one runaway agent cannot starve the rest. Behind a reverse proxy every request shares the
+  proxy's address, so the limit then applies to the whole team.
 
 For local development from a checkout:
 
@@ -193,9 +205,30 @@ npm run setup    # run the setup wizard from source
 - `jira_list_sprints`
 - `jira_get_sprint_issues`
 - `confluence_get_page`
+- `confluence_get_page_children`
+- `confluence_get_page_comments`
+- `confluence_list_attachments`
+- `confluence_download_attachment`
+- `confluence_get_page_versions`
 - `confluence_search_pages`
 - `confluence_get_space_pages`
 - `confluence_list_spaces`
+
+## MCP Resources and Prompts
+
+Resources let a client attach an issue or page as context without a tool call:
+
+- `jira://issue/{key}` — an issue as Markdown, e.g. `jira://issue/ABC-123`
+- `confluence://page/{id}` — a page as Markdown, e.g. `confluence://page/123456`
+
+Bodies above 40,000 characters are cut, with a pointer to `jira_get_issue` or `confluence_get_page`
+for the rest.
+
+Prompts are ready-made instructions that name the tools to call:
+
+- `summarize_issue` (`issueKey`) — state, decisions, open questions and next steps
+- `release_notes` (`jql`, optional `audience`) — release notes grouped by issue type
+- `summarize_page` (`pageId`) — key points and action items of a Confluence page
 
 ## Structured output
 
@@ -208,12 +241,21 @@ tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
 
 - The server uses Jira/Confluence REST API GET endpoints (plus one read-only POST,
   `search/approximate-count`, behind an allowlist); every request goes through
-  a single HTTP client (30 s timeout, retries on HTTP 429/502/503/504 honouring `Retry-After`).
+  a single HTTP client (30 s per attempt, 45 s in total; retries on HTTP 429/502/503/504 honouring `Retry-After`, but never waiting past the 45 s).
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
-- Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
-  server instructions tell the client not to follow instructions found in it.
+- Jira/Confluence text is untrusted: Markdown results end with a note saying so, `structuredContent`
+  carries `untrusted: true`, and the server instructions tell the client not to follow instructions found in it.
 - Issue and comment reads are cached for 30 s (`JIRA_ISSUE_CACHE_SECONDS`), so a repeated read can
   be that stale.
 - The only local side effect is `jira_download_attachment` writing a file (off in HTTP mode). An explicit
-  `outputPath` never overwrites an existing file, since attachment content is untrusted.
+  `outputPath` never overwrites an existing file and must stay inside `JIRA_ATTACHMENT_DIR` or a
+  directory from `JIRA_ATTACHMENT_ROOTS` (symlinks are resolved), since attachment content is untrusted.
   Downloads above 100 MB are refused.
+
+## Releasing
+
+1. Bump `version` in `package.json` (and `package-lock.json`) in a PR and merge it.
+2. Tag the merge commit and push the tag: `git tag v0.3.0 && git push origin v0.3.0`.
+3. The `Release` workflow checks the tag against `package.json`, runs lint and tests, publishes to
+   npm with provenance and creates a GitHub release with generated notes. It needs an
+   `NPM_TOKEN` repository secret (an npm automation token with publish rights).

@@ -7,6 +7,7 @@ import { ISSUE_CACHE_TTL_MS, ReferenceCache } from "./cache.js";
 import { ConfluenceClient } from "./confluence-client.js";
 import { AtlassianHttp } from "./http.js";
 import { JiraClient } from "./jira-client.js";
+import { registerPrompts, registerResources } from "./resources.js";
 import { registerAttachmentTools } from "./tools/attachments.js";
 import { registerConfluenceTools } from "./tools/confluence.js";
 import { registerJiraTools } from "./tools/jira.js";
@@ -35,6 +36,8 @@ export type ServerDeps = {
   caches?: ServerCaches;
   // Register the attachment download tools (they write to the server's disk); default true.
   downloads?: boolean;
+  // Receives one line per Atlassian request (see JIRA_MCP_DEBUG); never includes credentials.
+  debugLog?: (line: string) => void;
 };
 
 export type ServerCaches = { reference: ReferenceCache; issue: ReferenceCache };
@@ -53,14 +56,14 @@ export function createCaches(deps: Pick<ServerDeps, "cacheTtlMs" | "issueCacheTt
 }
 
 /**
- * Creates the MCP server with every read-only Jira and Confluence tool registered.
+ * Creates the MCP server with every read-only Jira and Confluence tool, resource and prompt registered.
  *
  * @param config Jira connection settings.
  * @param deps Test hooks: fetch, download directory and cache TTL.
  * @returns MCP server with all tools registered, not yet connected.
  */
 export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): McpServer {
-  const http = new AtlassianHttp(config, deps.fetch);
+  const http = new AtlassianHttp(config, deps.fetch, deps.debugLog);
   const caches = deps.caches ?? createCaches(deps);
   const jira = new JiraClient(http, caches.reference, config, caches.issue);
   const confluence = new ConfluenceClient(http, caches.reference);
@@ -78,6 +81,8 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
 
   registerJiraTools(server, jira);
   registerConfluenceTools(server, confluence);
+  registerResources(server, jira, confluence);
+  registerPrompts(server);
 
   if (deps.downloads !== false) {
     registerAttachmentTools(server, jira, confluence, downloadDir);

@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
-import { startHttpServer, type RunningHttpServer } from "./http-server.js";
+import { RateLimiter, startHttpServer, type RunningHttpServer } from "./http-server.js";
 import { createCaches, createServer } from "./server.js";
 
 const config = {
@@ -13,7 +13,7 @@ const config = {
   customFields: []
 };
 
-async function start(options: { token?: string; host?: string } = {}) {
+async function start(options: { token?: string; host?: string; rateLimitPerMinute?: number } = {}) {
   const calls: URL[] = [];
   const fetchImpl = ((input: string | URL | Request) => {
     const url = new URL(input instanceof Request ? input.url : input);
@@ -29,6 +29,7 @@ async function start(options: { token?: string; host?: string } = {}) {
     host: options.host ?? "127.0.0.1",
     port: 0,
     token: options.token,
+    rateLimitPerMinute: options.rateLimitPerMinute,
     createServer: () => createServer(config, { fetch: fetchImpl, caches, downloads: false })
   });
   return { running, calls, url: `http://127.0.0.1:${running.port}/mcp` };
@@ -124,4 +125,45 @@ test("refuses to listen beyond loopback without a token", async () => {
     startHttpServer({ host: "0.0.0.0", port: 0, createServer: () => createServer(config) }),
     /without MCP_HTTP_TOKEN/
   );
+});
+
+test("RateLimiter counts per key in fixed windows and 0 disables it", () => {
+  let now = 0;
+  const limiter = new RateLimiter(2, () => now);
+
+  assert.equal(limiter.hit("a"), 0);
+  assert.equal(limiter.hit("a"), 0);
+  assert.equal(limiter.hit("a"), 60);
+  assert.equal(limiter.hit("b"), 0);
+
+  now = 45_000;
+  assert.equal(limiter.hit("a"), 15);
+
+  now = 60_000;
+  assert.equal(limiter.hit("a"), 0);
+
+  const off = new RateLimiter(0);
+  for (let i = 0; i < 1000; i++) {
+    assert.equal(off.hit("a"), 0);
+  }
+});
+
+test("requests above the rate limit get 429 with Retry-After, the health check is exempt", async () => {
+  const { running, url } = await start({ rateLimitPerMinute: 2 });
+
+  try {
+    const body = JSON.stringify({ jsonrpc: "2.0", id: 1, method: "tools/list" });
+    const headers = { "content-type": "application/json", accept: "application/json, text/event-stream" };
+
+    assert.equal((await fetch(url, { method: "POST", headers, body })).status, 200);
+    assert.equal((await fetch(url, { method: "POST", headers, body })).status, 200);
+
+    const limited = await fetch(url, { method: "POST", headers, body });
+    assert.equal(limited.status, 429);
+    assert.ok(Number(limited.headers.get("retry-after")) > 0);
+
+    assert.equal((await fetch(url.replace("/mcp", "/healthz"))).status, 200);
+  } finally {
+    await running.close();
+  }
 });

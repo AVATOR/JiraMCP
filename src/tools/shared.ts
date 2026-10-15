@@ -149,8 +149,10 @@ export function respond<T>(
   const base = raw
     ? toTextResult(data, options.customFields)
     : toMarkdownResult(render(data), { untrusted: options.untrusted ?? true });
-  // The structured form is the compact data in both modes; `raw` only changes the text.
-  return { ...base, structuredContent: options.structured };
+  // The structured form is the compact data in both modes; `raw` only changes the text. It carries
+  // the untrusted mark too, because clients that read it never see the note in the Markdown.
+  const untrusted = options.untrusted ?? true;
+  return { ...base, structuredContent: untrusted ? { ...options.structured, untrusted } : options.structured };
 }
 
 export const rawFlag = z.boolean().optional().describe("Return the unprocessed Jira JSON (debugging only; large).");
