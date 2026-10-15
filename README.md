@@ -216,3 +216,11 @@ tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
 - The only local side effect is `jira_download_attachment` writing a file (off in HTTP mode). An explicit
   `outputPath` never overwrites an existing file, since attachment content is untrusted.
   Downloads above 100 MB are refused.
+
+## Releasing
+
+1. Bump `version` in `package.json` (and `package-lock.json`) in a PR and merge it.
+2. Tag the merge commit and push the tag: `git tag v0.3.0 && git push origin v0.3.0`.
+3. The `Release` workflow checks the tag against `package.json`, runs lint and tests, publishes to
+   npm with provenance and creates a GitHub release with generated notes. It needs an
+   `NPM_TOKEN` repository secret (an npm automation token with publish rights).
