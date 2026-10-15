@@ -12,6 +12,9 @@ const MCP_PATH = "/mcp";
 const HEALTH_PATH = "/healthz";
 const MAX_BODY_BYTES = 4 * 1024 * 1024;
 const LOOPBACK_HOSTS = new Set(["127.0.0.1", "localhost", "::1", "[::1]"]);
+const RATE_WINDOW_MS = 60_000;
+// Every request can fan out into several Jira calls and they all draw on one Atlassian quota.
+export const DEFAULT_RATE_LIMIT_PER_MINUTE = 120;
 
 export type HttpServerOptions = {
   host: string;
@@ -20,6 +23,10 @@ export type HttpServerOptions = {
   token?: string;
   // Builds a fresh MCP server for one request.
   createServer: () => McpServer;
+  // Requests per minute allowed from one client address; 0 disables the limit.
+  rateLimitPerMinute?: number;
+  // Clock, replaceable in tests.
+  now?: () => number;
 };
 
 export type RunningHttpServer = {
@@ -36,6 +43,50 @@ export type RunningHttpServer = {
  */
 export function isLoopback(host: string): boolean {
   return LOOPBACK_HOSTS.has(host.toLowerCase());
+}
+
+/**
+ * Fixed-window request counter per client key.
+ */
+export class RateLimiter {
+  private readonly windows = new Map<string, { start: number; count: number }>();
+
+  constructor(
+    private readonly limit: number,
+    private readonly now: () => number = Date.now
+  ) {}
+
+  /**
+   * Counts one request for the key.
+   *
+   * @param key Client identity, e.g. its remote address.
+   * @returns 0 when the request is allowed, else the seconds until the window resets.
+   */
+  hit(key: string): number {
+    if (this.limit <= 0) {
+      return 0;
+    }
+
+    const now = this.now();
+    const current = this.windows.get(key);
+
+    if (!current || now - current.start >= RATE_WINDOW_MS) {
+      // Drop expired windows so a stream of one-off clients cannot grow the map without bound.
+      if (this.windows.size >= 1000) {
+        for (const [other, window] of this.windows) {
+          if (now - window.start >= RATE_WINDOW_MS) {
+            this.windows.delete(other);
+          }
+        }
+      }
+
+      this.windows.set(key, { start: now, count: 1 });
+      return 0;
+    }
+
+    current.count++;
+    return current.count > this.limit ? Math.ceil((RATE_WINDOW_MS - (now - current.start)) / 1000) : 0;
+  }
 }
 
 /**
@@ -128,6 +179,8 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
     );
   }
 
+  const limiter = new RateLimiter(options.rateLimitPerMinute ?? DEFAULT_RATE_LIMIT_PER_MINUTE, options.now);
+
   const server = createHttpServer((req, res) => {
     void (async () => {
       try {
@@ -150,6 +203,12 @@ export async function startHttpServer(options: HttpServerOptions): Promise<Runni
 
         if (options.token && !hasToken(req.headers.authorization, options.token)) {
           return sendError(res, 401, "Unauthorized", { "WWW-Authenticate": "Bearer" });
+        }
+
+        // After authentication, so unauthenticated traffic cannot use up anyone's allowance.
+        const retryAfter = limiter.hit(req.socket.remoteAddress ?? "unknown");
+        if (retryAfter > 0) {
+          return sendError(res, 429, "Too many requests", { "Retry-After": String(retryAfter) });
         }
 
         await handleMcp(req, res, options);
