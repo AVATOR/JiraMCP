@@ -32,7 +32,7 @@ Optional variables:
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
 - `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
-- `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN` — Streamable HTTP, see below
+- `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN`, `MCP_HTTP_RATE_LIMIT` — Streamable HTTP, see below
 
 ### Getting a Jira API token
 
@@ -158,6 +158,10 @@ Clients then connect to `http://<host>:3000/mcp` and send `Authorization: Bearer
 - The attachment download tools are not registered in this mode, since they would write to the
   server's disk. `jira_list_attachments` and `confluence_list_attachments` still work.
 - The reference and issue caches are shared by all callers.
+- `MCP_HTTP_RATE_LIMIT` caps requests per minute from one client address (default `120`, `0`
+  disables). Excess requests get `429` with `Retry-After`. All callers use one Atlassian quota,
+  so one runaway agent cannot starve the rest. Behind a reverse proxy every request shares the
+  proxy's address, so the limit then applies to the whole team.
 
 For local development from a checkout:
 
