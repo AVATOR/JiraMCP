@@ -12,7 +12,11 @@ import type {
   JiraCommentPage,
   JiraField,
   JiraFilter,
+  JiraGraphEdge,
+  JiraGraphNode,
   JiraIssue,
+  JiraIssueGraph,
+  JiraIssueRef,
   JiraPage,
   JiraProject,
   JiraProjectDetail,
@@ -526,6 +530,164 @@ export class JiraClient {
    */
   async getFilter(filterId: string): Promise<JiraFilter> {
     return this.http.get<JiraFilter>(`/rest/api/3/filter/${encodeURIComponent(filterId)}`);
+  }
+
+  /**
+   * Walks the links of an issue breadth first: issue links, parent and subtasks, and optionally the
+   * children of each issue (a JQL search on `parent`). Issues of other projects than the allowed ones
+   * are left out, and an issue that cannot be read stays in the graph without its own links.
+   *
+   * @param issueKey Issue the walk starts at.
+   * @param options depth: levels to follow; maxNodes: stop after this many issues; linkTypes: only issue
+   *   links whose type name or wording matches; hierarchy: follow parent and subtasks; children: also look
+   *   up issues whose parent is a visited issue.
+   * @returns Visited issues and the relations between them.
+   */
+  async getIssueGraph(
+    issueKey: string,
+    options: { depth: number; maxNodes: number; linkTypes?: string[]; hierarchy: boolean; children: boolean }
+  ): Promise<JiraIssueGraph> {
+    this.guardIssue(issueKey);
+    const wanted = options.linkTypes?.map((name) => name.trim().toLowerCase()).filter(Boolean);
+    const nodes = new Map<string, JiraGraphNode>();
+    const edges = new Map<string, JiraGraphEdge>();
+    let truncated = false;
+
+    const allowed = (key: string | undefined): key is string =>
+      Boolean(key) && (!this.projectAllowlist || this.projectAllowlist.has(projectOfIssue(key)));
+
+    const addEdge = (from: string, label: string, to: string) => {
+      edges.set(`${from}|${label}|${to}`, { from, label, to });
+    };
+
+    // Registers an issue seen through a link, filling in what the reference carries; false when the
+    // node limit leaves no room for it.
+    const touch = (ref: JiraIssueRef, depth: number): boolean => {
+      const key = ref.key as string;
+      const known = nodes.get(key);
+
+      if (known) {
+        known.summary ??= ref.fields?.summary;
+        known.status ??= ref.fields?.status?.name;
+        known.type ??= ref.fields?.issuetype?.name;
+        return true;
+      }
+
+      if (nodes.size >= options.maxNodes) {
+        truncated = true;
+        return false;
+      }
+
+      nodes.set(key, {
+        key,
+        summary: ref.fields?.summary,
+        status: ref.fields?.status?.name,
+        type: ref.fields?.issuetype?.name,
+        depth
+      });
+      return true;
+    };
+
+    const matchesType = (type: { name?: string; inward?: string; outward?: string } | undefined) =>
+      !wanted?.length ||
+      [type?.name, type?.inward, type?.outward].some((value) => value && wanted.includes(value.toLowerCase()));
+
+    nodes.set(issueKey, { key: issueKey, depth: 0 });
+    let frontier = [issueKey];
+
+    for (let level = 0; level < options.depth && frontier.length; level++) {
+      const next: string[] = [];
+
+      // A few issues at a time keeps a wide level from flooding Atlassian with requests.
+      for (let start = 0; start < frontier.length; start += 5) {
+        const batch = frontier.slice(start, start + 5);
+        const loaded = await Promise.all(
+          batch.map(async (key) => {
+            try {
+              const issue = await this.getIssue(key);
+              const children = options.children
+                ? await this.searchIssues({ jql: `parent = ${jqlString(key)}`, maxResults: 50 })
+                : undefined;
+              return { key, issue, children: children?.issues ?? [] };
+            } catch {
+              return { key, issue: undefined, children: [] };
+            }
+          })
+        );
+
+        for (const { key, issue, children } of loaded) {
+          const node = nodes.get(key) as JiraGraphNode;
+
+          if (!issue) {
+            node.unavailable = true;
+            continue;
+          }
+
+          const fields = issue.fields ?? {};
+          node.summary ??= fields.summary;
+          node.status ??= fields.status?.name;
+          node.type ??= fields.issuetype?.name;
+
+          const found: { ref: JiraIssueRef; from: string; label: string; to: string }[] = [];
+          const other = (ref: JiraIssueRef, label: string, ownIsSource: boolean) =>
+            ownIsSource
+              ? { ref, from: key, label, to: ref.key as string }
+              : { ref, from: ref.key as string, label, to: key };
+
+          for (const link of asArray<{
+            type?: { name?: string; inward?: string; outward?: string };
+            inwardIssue?: JiraIssueRef;
+            outwardIssue?: JiraIssueRef;
+          }>(fields.issuelinks)) {
+            if (!matchesType(link?.type)) {
+              continue;
+            }
+
+            // Edges are stored in the outward wording, "A blocks B", whichever side the link was read from.
+            if (link?.outwardIssue?.key) {
+              found.push(other(link.outwardIssue, link.type?.outward ?? link.type?.name ?? "relates to", true));
+            } else if (link?.inwardIssue?.key) {
+              found.push(other(link.inwardIssue, link.type?.outward ?? link.type?.name ?? "relates to", false));
+            }
+          }
+
+          if (options.hierarchy) {
+            if (fields.parent?.key) {
+              found.push(other(fields.parent, "parent of", false));
+            }
+
+            for (const subtask of asArray<JiraIssueRef>(fields.subtasks)) {
+              if (subtask?.key) {
+                found.push(other(subtask, "parent of", true));
+              }
+            }
+          }
+
+          for (const child of children) {
+            if (child?.key) {
+              found.push(other(child, "parent of", true));
+            }
+          }
+
+          for (const { ref, from, label, to } of found) {
+            if (!allowed(ref.key)) {
+              continue;
+            }
+
+            if (touch(ref, level + 1)) {
+              addEdge(from, label, to);
+              if ((nodes.get(ref.key) as JiraGraphNode).depth === level + 1 && !next.includes(ref.key)) {
+                next.push(ref.key);
+              }
+            }
+          }
+        }
+      }
+
+      frontier = next;
+    }
+
+    return { root: issueKey, nodes: [...nodes.values()], edges: [...edges.values()], depth: options.depth, truncated };
   }
 
   /**

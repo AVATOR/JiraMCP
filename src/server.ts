@@ -11,6 +11,7 @@ import { registerPrompts, registerResources } from "./resources.js";
 import { registerAttachmentTools } from "./tools/attachments.js";
 import { registerConfluenceTools } from "./tools/confluence.js";
 import { registerLinkTools } from "./tools/links.js";
+import { registerContextTools } from "./tools/context.js";
 import { registerJiraTools } from "./tools/jira.js";
 import type { JiraClientConfig } from "./types.js";
 
@@ -83,6 +84,7 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
   registerJiraTools(server, jira);
   registerConfluenceTools(server, confluence);
   registerLinkTools(server, jira, confluence);
+  registerContextTools(server, jira, confluence);
   registerResources(server, jira, confluence);
   registerPrompts(server);
 

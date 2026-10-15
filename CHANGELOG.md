@@ -6,6 +6,11 @@
 
 - `confluence_find_pages_for_issue` (pages that mention an issue key) and `confluence_get_page_issues` (Jira issues
   a page refers to, with summary and status).
+- `jira_get_issue_context`: an issue with its newest comments, recent history, remote links and excerpts of the
+  Confluence pages it links to, in one call.
+- `jira_get_issue_links`: follows issue links, parent/epic and subtasks up to 3 levels and returns the issues with
+  the relations between them in one call.
+- `jira-mcp-add --stdin` reads the answers from piped input, for scripted setup.
 
 ## 0.3.0
 
