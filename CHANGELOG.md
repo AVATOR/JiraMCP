@@ -4,6 +4,9 @@
 
 ### Added
 
+- `confluence_get_space_tree` (page hierarchy of a space in one call) and `confluence_get_page_diff` (line diff
+  between two versions of a page).
+- `confluence_search_pages` takes `labels` and `contributor`, and `query` is optional when one of them is given.
 - `confluence_find_pages_for_issue` (pages that mention an issue key) and `confluence_get_page_issues` (Jira issues
   a page refers to, with summary and status).
 - `jira_get_issue_context`: an issue with its newest comments, recent history, remote links and excerpts of the

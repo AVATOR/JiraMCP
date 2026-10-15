@@ -8,7 +8,9 @@ import {
   formatConfluencePage,
   formatConfluenceSearch,
   formatConfluenceSpacePages,
-  formatConfluenceSpaces
+  formatConfluenceSpaces,
+  formatConfluenceTree,
+  buildPageTree
 } from "../compact/index.js";
 import type { ConfluenceClient } from "../confluence-client.js";
 import {
@@ -21,15 +23,19 @@ import {
   confluenceSearchData,
   confluenceSearchOutput,
   pageData,
+  pageDiffOutput,
   pageOutput,
   spacePagesData,
   spacePagesOutput,
   spacesData,
   spacesOutput,
+  spaceTreeOutput,
   versionsData,
   versionsOutput
 } from "../structured.js";
+import { diffLines, formatDiff } from "../diff.js";
 import { nextCursor } from "../query.js";
+import { storageToMarkdown } from "../storage.js";
 import { limitParam, matchesQuery, rawFlag, READ_ONLY_ANNOTATIONS, respond } from "./shared.js";
 
 /**
@@ -178,12 +184,15 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
     {
       title: "Search Confluence pages",
       description:
-        "Full-text search of Confluence pages (title and body), newest first. Use titleOnly to match titles only " +
-        "and spaceKey to stay within one space.",
+        "Full-text search of Confluence pages (title and body), newest first. Use titleOnly to match titles only, " +
+        "spaceKey to stay within one space, labels to require page labels and contributor (an account id from " +
+        "jira_find_users) to find pages somebody edited. At least one of query, labels, contributor is needed.",
       annotations: READ_ONLY_ANNOTATIONS,
       outputSchema: confluenceSearchOutput,
       inputSchema: {
-        query: z.string().min(1).describe("Words to look for in the page title or body"),
+        query: z.string().min(1).optional().describe("Words to look for in the page title or body"),
+        labels: z.array(z.string().min(1)).max(10).optional().describe("Page labels; a page must carry all of them."),
+        contributor: z.string().min(1).optional().describe("Account id of a user who created or edited the page."),
         spaceKey: z.string().min(1).optional().describe("Only search this space (e.g., 'MS')."),
         titleOnly: z.boolean().optional().describe("Match page titles only, not the body."),
         limit: limitParam(100, 25, "pages"),
@@ -191,9 +200,113 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
         raw: rawFlag
       }
     },
-    async ({ query, spaceKey, titleOnly, limit, cursor, raw }) => {
-      const result = await client.searchPages({ query, spaceKey, titleOnly, limit: limit ?? 25, cursor });
+    async ({ query, labels, contributor, spaceKey, titleOnly, limit, cursor, raw }) => {
+      const result = await client.searchPages({
+        query,
+        labels,
+        contributor,
+        spaceKey,
+        titleOnly,
+        limit: limit ?? 25,
+        cursor
+      });
       return respond(raw, result, formatConfluenceSearch, { structured: confluenceSearchData(result) });
+    }
+  );
+
+  server.registerTool(
+    "confluence_get_space_tree",
+    {
+      title: "Get Confluence space page tree",
+      description:
+        "The page hierarchy of a space as an indented list with page ids, built in one call from the parent ids " +
+        "(instead of walking confluence_get_page_children page by page).",
+      annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: spaceTreeOutput,
+      inputSchema: {
+        spaceKey: z.string().min(1).describe("The space key (e.g., 'MS')"),
+        depth: z.number().int().min(1).max(10).optional().describe("Levels to show (default 3)."),
+        maxPages: z.number().int().min(1).max(1000).optional().describe("Read at most this many pages (default 300)."),
+        raw: rawFlag
+      }
+    },
+    async ({ spaceKey, depth, maxPages, raw }) => {
+      const { pages, truncated } = await client.getSpaceTree(spaceKey, maxPages ?? 300);
+      const tree = buildPageTree(pages, depth ?? 3);
+      return respond(raw, pages, () => formatConfluenceTree(tree, { spaceKey, truncated }), {
+        structured: {
+          spaceKey,
+          truncated,
+          hidden: tree.hidden,
+          pages: tree.nodes
+        }
+      });
+    }
+  );
+
+  server.registerTool(
+    "confluence_get_page_diff",
+    {
+      title: "Compare Confluence page versions",
+      description:
+        "What changed between two versions of a page, as a line diff of the Markdown text. Defaults to the latest " +
+        "version against the one before it; list versions with confluence_get_page_versions.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: pageDiffOutput,
+      inputSchema: {
+        pageId: pageIdParam,
+        spaceKey: spaceKeyParam,
+        fromVersion: z.number().int().min(1).optional().describe("Older version (default: the one before toVersion)."),
+        toVersion: z.number().int().min(1).optional().describe("Newer version (default: the latest)."),
+        context: z
+          .number()
+          .int()
+          .min(0)
+          .max(20)
+          .optional()
+          .describe("Unchanged lines kept around changes (default 2)."),
+        raw: rawFlag
+      }
+    },
+    async ({ pageId, spaceKey, fromVersion, toVersion, context, raw }) => {
+      const id = await client.resolvePageId(pageId, spaceKey);
+      const latest = await client.getPage(id);
+      const to = toVersion ?? latest.version?.number ?? 1;
+      const from = fromVersion ?? to - 1;
+
+      if (from < 1 || from >= to) {
+        throw new Error(`Nothing to compare: fromVersion must be at least 1 and lower than toVersion (${to})`);
+      }
+
+      const [older, newer] = await Promise.all([
+        client.getPageVersion(id, from),
+        to === latest.version?.number ? latest : client.getPageVersion(id, to)
+      ]);
+      const lines = (page: typeof latest) => storageToMarkdown(page.body?.storage?.value ?? "").split("\n");
+      const changes = diffLines(lines(older), lines(newer));
+      const added = changes.filter((line) => line.op === "+").length;
+      const removed = changes.filter((line) => line.op === "-").length;
+      const body = formatDiff(changes, context ?? 2);
+      const data = {
+        pageId: id,
+        title: newer.title,
+        fromVersion: from,
+        toVersion: to,
+        added,
+        removed,
+        diff: body
+      };
+      const meta = (page: typeof latest, number: number) =>
+        `v${number}${page.version?.createdAt ? ` (${page.version.createdAt.slice(0, 10)}${page.version.authorId ? `, ${page.version.authorId}` : ""})` : ""}`;
+      const render = () =>
+        [
+          `${newer.title ?? id} (${id}): ${meta(older, from)} → ${meta(newer, to)} — +${added} −${removed} lines`,
+          ...(newer.version?.message ? [`Change message: ${newer.version.message}`] : []),
+          "",
+          body ? `\`\`\`\`diff\n${body}\n\`\`\`\`` : "_No textual changes._"
+        ].join("\n");
+
+      return respond(raw, data, render, { structured: data });
     }
   );
 
