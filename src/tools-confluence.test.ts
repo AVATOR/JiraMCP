@@ -283,3 +283,50 @@ test("confluence_download_attachment refuses oversized files before downloading"
   assert.match(text, /above the 104857600-byte limit/);
   assert.equal(calls.length, 1);
 });
+
+test("confluence_find_pages_for_issue searches the issue key as a phrase and validates it", async () => {
+  const { client, calls } = await connect({
+    "/wiki/rest/api/search": () =>
+      json({ totalSize: 1, results: [{ content: { id: "5", title: "Spec" }, lastModified: "2026-10-01T00:00:00Z" }] })
+  });
+
+  const { text } = await call(client, "confluence_find_pages_for_issue", { issueKey: "abc-12", spaceKey: "ENG" });
+
+  assert.match(text, /1 of 1 pages/);
+  assert.match(text, /Spec/);
+  const cql = calls[0].url.searchParams.get("cql") ?? "";
+  assert.match(cql, /ABC/);
+  assert.match(cql, /space = "ENG"/);
+
+  const bad = await call(client, "confluence_find_pages_for_issue", { issueKey: "not a key" });
+  assert.equal(bad.result.isError, true);
+});
+
+test("confluence_get_page_issues lists the issues of macros, links and text, ignoring look-alikes", async () => {
+  const storage =
+    '<ac:structured-macro ac:name="jira"><ac:parameter ac:name="key">XYZ-7</ac:parameter></ac:structured-macro>' +
+    '<p>See ABC-1 and UTF-8 and <a href="https://example.atlassian.net/browse/ABC-2">two</a> and ABC-1 again, ABC-404.</p>';
+  const { client, calls } = await connect({
+    "/wiki/api/v2/pages/42": () =>
+      json({ id: "42", title: "Release", spaceId: "1", body: { storage: { value: storage } } }),
+    "/rest/api/3/project/search": () => json({ isLast: true, values: [{ key: "ABC" }, { key: "XYZ" }] }),
+    "/rest/api/3/search/jql": () =>
+      json({
+        issues: [
+          { key: "ABC-1", fields: { summary: "One", status: { name: "Done" } } },
+          { key: "XYZ-7", fields: { summary: "Seven", status: { name: "To Do" } } },
+          { key: "ABC-2", fields: { summary: "Two", status: { name: "Open" } } }
+        ]
+      })
+  });
+
+  const { text, result } = await call(client, "confluence_get_page_issues", { pageId: "42" });
+
+  assert.match(text, /Release \(42\) — 4 Jira issues referenced/);
+  assert.match(text, /\| XYZ-7 \| Seven \| To Do \|/);
+  assert.match(text, /Not found or not readable: ABC-404/);
+  assert.doesNotMatch(text, /UTF-8/);
+  const jql = calls.find((entry) => entry.url.pathname === "/rest/api/3/search/jql")?.url.searchParams.get("jql");
+  assert.equal(jql, 'key in ("XYZ-7", "ABC-1", "ABC-2", "ABC-404")');
+  assert.equal(result.structuredContent.issues.length, 3);
+});
