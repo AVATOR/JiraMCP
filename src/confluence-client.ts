@@ -1,3 +1,4 @@
+import { Allowlist } from "./access.js";
 import type { ReferenceCache } from "./cache.js";
 import { MAX_LIST_PAGES, type AtlassianHttp } from "./http.js";
 import { cqlSearchString, jqlString, nextCursor } from "./query.js";
@@ -30,10 +31,63 @@ function pageQuery(limit: number, cursor?: string): Record<string, string> {
  * Confluence REST client. Only issues GET requests, so it cannot modify anything.
  */
 export class ConfluenceClient {
+  // Space keys the server may read; undefined means no limit.
+  readonly allowedSpaces?: string[];
+  private readonly spaceAllowlist?: Allowlist;
+
   constructor(
     private readonly http: AtlassianHttp,
-    private readonly cache: ReferenceCache
-  ) {}
+    private readonly cache: ReferenceCache,
+    allowedSpaces?: string[]
+  ) {
+    this.allowedSpaces = allowedSpaces?.length ? allowedSpaces : undefined;
+    this.spaceAllowlist = this.allowedSpaces
+      ? new Allowlist(this.allowedSpaces, "Space", "CONFLUENCE_ALLOWED_SPACES")
+      : undefined;
+  }
+
+  /**
+   * Refuses a space outside the allowed ones.
+   *
+   * @param spaceKey Space key.
+   */
+  private guardSpace(spaceKey: string): void {
+    this.spaceAllowlist?.assert(spaceKey);
+  }
+
+  /**
+   * Refuses content that lives in a space outside the allowed ones. Spaces are matched by id, through
+   * the (filtered) space listing, because pages only carry the id.
+   *
+   * @param spaceId Space id of a page.
+   * @param what What is being refused, for the error message.
+   */
+  private async guardSpaceId(spaceId: string | undefined, what: string): Promise<void> {
+    if (!this.spaceAllowlist) {
+      return;
+    }
+
+    const allowed = (await this.getSpaces()).some((space) => space.id !== undefined && space.id === spaceId);
+    if (!allowed) {
+      throw new Error(`${what} is in a space that CONFLUENCE_ALLOWED_SPACES does not allow`);
+    }
+  }
+
+  /**
+   * Refuses a page outside the allowed spaces, looking its space up first (cached).
+   *
+   * @param pageId Page id.
+   */
+  private async guardPage(pageId: string): Promise<void> {
+    if (!this.spaceAllowlist) {
+      return;
+    }
+
+    const page = await this.cache.get(`page-space:${pageId}`, () =>
+      this.http.get<ConfluencePage>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}`)
+    );
+    await this.guardSpaceId(page?.spaceId, `Page ${pageId}`);
+  }
 
   get baseUrl(): string {
     return `${this.http.baseUrl}/wiki`;
@@ -46,10 +100,12 @@ export class ConfluenceClient {
    * @returns Raw page with a storage-format body.
    */
   async getPage(pageId: string): Promise<ConfluencePage> {
-    return this.http.get<ConfluencePage>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
+    const page = await this.http.get<ConfluencePage>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}`, {
       "body-format": "storage",
       "include-labels": "true"
     });
+    await this.guardSpaceId(page?.spaceId, `Page ${pageId}`);
+    return page;
   }
 
   /**
@@ -59,6 +115,7 @@ export class ConfluenceClient {
    * @returns Ancestor pages (breadcrumbs).
    */
   async getAncestors(pageId: string): Promise<ConfluenceAncestor[]> {
+    await this.guardPage(pageId);
     const result = await this.http.get<{ results?: ConfluenceAncestor[] }>(
       `/wiki/api/v2/pages/${encodeURIComponent(pageId)}/ancestors`
     );
@@ -126,6 +183,7 @@ export class ConfluenceClient {
    * @returns Raw v2 children response.
    */
   async getChildren(pageId: string, limit: number, cursor?: string): Promise<ConfluenceChildren> {
+    await this.guardPage(pageId);
     return this.http.get<ConfluenceChildren>(
       `/wiki/api/v2/pages/${encodeURIComponent(pageId)}/children`,
       pageQuery(limit, cursor)
@@ -147,6 +205,7 @@ export class ConfluenceClient {
     limit: number,
     cursor?: string
   ): Promise<ConfluenceComments> {
+    await this.guardPage(pageId);
     return this.http.get<ConfluenceComments>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}/${kind}-comments`, {
       ...pageQuery(limit, cursor),
       "body-format": "storage"
@@ -162,6 +221,7 @@ export class ConfluenceClient {
    * @returns Raw v2 attachments response.
    */
   async getAttachments(pageId: string, limit: number, cursor?: string): Promise<ConfluenceAttachments> {
+    await this.guardPage(pageId);
     return this.http.get<ConfluenceAttachments>(
       `/wiki/api/v2/pages/${encodeURIComponent(pageId)}/attachments`,
       pageQuery(limit, cursor)
@@ -175,7 +235,20 @@ export class ConfluenceClient {
    * @returns Attachment metadata.
    */
   async getAttachmentMeta(attachmentId: string): Promise<ConfluenceAttachment> {
-    return this.http.get<ConfluenceAttachment>(`/wiki/api/v2/attachments/${encodeURIComponent(attachmentId)}`);
+    const meta = await this.http.get<ConfluenceAttachment>(
+      `/wiki/api/v2/attachments/${encodeURIComponent(attachmentId)}`
+    );
+
+    if (this.spaceAllowlist) {
+      if (!meta?.pageId) {
+        throw new Error(
+          `Attachment ${attachmentId} does not name its page, so CONFLUENCE_ALLOWED_SPACES cannot be applied`
+        );
+      }
+      await this.guardPage(meta.pageId);
+    }
+
+    return meta;
   }
 
   /**
@@ -213,6 +286,7 @@ export class ConfluenceClient {
    * @returns Raw v2 versions response.
    */
   async getVersions(pageId: string, limit: number, cursor?: string): Promise<ConfluenceVersions> {
+    await this.guardPage(pageId);
     return this.http.get<ConfluenceVersions>(`/wiki/api/v2/pages/${encodeURIComponent(pageId)}/versions`, {
       ...pageQuery(limit, cursor),
       sort: "-modified-date"
@@ -232,10 +306,15 @@ export class ConfluenceClient {
     titleOnly?: boolean;
     cursor?: string;
   }): Promise<ConfluenceSearchResult> {
+    if (params.spaceKey) {
+      this.guardSpace(params.spaceKey);
+    }
+
     const clauses = [
       "type = page",
       `${params.titleOnly ? "title" : "text"} ~ ${cqlSearchString(params.query)}`,
-      ...(params.spaceKey ? [`space = ${jqlString(params.spaceKey)}`] : [])
+      ...(params.spaceKey ? [`space = ${jqlString(params.spaceKey)}`] : []),
+      ...(this.allowedSpaces ? [`space in (${this.allowedSpaces.map(jqlString).join(", ")})`] : [])
     ];
 
     const query: Record<string, string> = {
@@ -255,6 +334,8 @@ export class ConfluenceClient {
    * @returns All spaces.
    */
   async getSpaces(): Promise<ConfluenceSpace[]> {
+    const allowlist = this.spaceAllowlist;
+
     return this.cache.get("confluence-spaces", async () => {
       const spaces: ConfluenceSpace[] = [];
       let cursor: string | null = null;
@@ -275,7 +356,7 @@ export class ConfluenceClient {
         }
       }
 
-      return spaces;
+      return allowlist ? spaces.filter((space) => allowlist.has(space.key)) : spaces;
     });
   }
 
@@ -288,6 +369,7 @@ export class ConfluenceClient {
    * @returns Raw v2 pages response.
    */
   async getSpacePages(spaceKey: string, limit: number, cursor?: string): Promise<ConfluenceSpacePages> {
+    this.guardSpace(spaceKey);
     const spaces = await this.http.get<ConfluenceSpaceList>("/wiki/api/v2/spaces", { keys: spaceKey });
     const spaceId = spaces?.results?.[0]?.id;
 

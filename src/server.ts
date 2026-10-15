@@ -63,7 +63,7 @@ export function createServer(config: JiraClientConfig, deps: ServerDeps = {}): M
   const http = new AtlassianHttp(config, deps.fetch);
   const caches = deps.caches ?? createCaches(deps);
   const jira = new JiraClient(http, caches.reference, config, caches.issue);
-  const confluence = new ConfluenceClient(http, caches.reference);
+  const confluence = new ConfluenceClient(http, caches.reference, config.allowedSpaces);
   const downloadDir =
     deps.downloadDir ?? (process.env.JIRA_ATTACHMENT_DIR?.trim() || path.join(os.tmpdir(), "jira-attachments"));
 

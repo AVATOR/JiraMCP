@@ -31,6 +31,7 @@ Optional variables:
 - `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
+- `JIRA_ALLOWED_PROJECTS`, `CONFLUENCE_ALLOWED_SPACES` — comma-separated project / space keys; when set, the server reads nothing else, whatever the token can see (see _Restricting what the agent can read_)
 - `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
 - `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN` — Streamable HTTP, see below
 
@@ -60,6 +61,14 @@ Notes:
   The server is read-only regardless, but the token itself is not.
 - `JIRA_BASE_URL` is your site root, for example `https://your-company.atlassian.net`,
   with no `/jira` or `/browse/...` suffix.
+- **Restricting what the agent can read.** The token sees everything its account sees, and a
+  prompt injection in one ticket could steer the agent elsewhere. `JIRA_ALLOWED_PROJECTS=ABC,XYZ`
+  and `CONFLUENCE_ALLOWED_SPACES=DOCS` make the server itself refuse the rest: issue and page
+  reads, JQL/CQL searches (the query is wrapped in a project/space filter), project, board, space
+  and attachment lookups. Limits: an issue that was moved to a project outside the list is only
+  caught on `jira_get_issue` (its other sub-resources are matched by the key you pass), sprint
+  issues from other projects are dropped from the listing, and `jira_download_attachment` needs
+  `issueKey` so the attachment can be tied to a project. Users, fields and statuses are not scoped.
 - Jira **Data Center / Server** (self-hosted) uses personal access tokens instead
   and is not covered by this setup.
 - Revoke a token on the same page the moment it leaks — for instance if it ends

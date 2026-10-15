@@ -3,6 +3,7 @@ import dotenv from "dotenv";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
 import { existsSync } from "node:fs";
 import path from "node:path";
+import { parseAllowlist } from "./access.js";
 import { startHttpServer } from "./http-server.js";
 import { createCaches, createServer, parseCustomFields, projectRoot, type JiraClientConfig } from "./server.js";
 
@@ -59,7 +60,9 @@ async function main() {
     email: getRequiredEnv("JIRA_EMAIL"),
     apiToken: getRequiredEnv("JIRA_API_TOKEN"),
     defaultProject: process.env.JIRA_DEFAULT_PROJECT?.trim() || undefined,
-    customFields: parseCustomFields(process.env.JIRA_CUSTOM_FIELDS)
+    customFields: parseCustomFields(process.env.JIRA_CUSTOM_FIELDS),
+    allowedProjects: parseAllowlist(process.env.JIRA_ALLOWED_PROJECTS),
+    allowedSpaces: parseAllowlist(process.env.CONFLUENCE_ALLOWED_SPACES)
   };
   const issueCacheTtlMs = getSecondsEnv("JIRA_ISSUE_CACHE_SECONDS");
   const transport = process.env.MCP_TRANSPORT?.trim().toLowerCase() || "stdio";
