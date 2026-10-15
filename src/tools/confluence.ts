@@ -311,6 +311,37 @@ export function registerConfluenceTools(server: McpServer, client: ConfluenceCli
   );
 
   server.registerTool(
+    "confluence_find_pages_for_issue",
+    {
+      title: "Find Confluence pages that mention a Jira issue",
+      description:
+        "Pages whose body or title contains a Jira issue key (specs, meeting notes, release pages), newest first. " +
+        "For links set on the issue itself use jira_get_remote_links or jira_get_issue_context.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: confluenceSearchOutput,
+      inputSchema: {
+        issueKey: z
+          .string()
+          .regex(/^[A-Za-z][A-Za-z0-9_]*-\d+$/, "Expected an issue key like ABC-123")
+          .describe("Jira issue key, e.g. ABC-123."),
+        spaceKey: spaceKeyParam,
+        limit: limitParam(100, 25, "pages"),
+        cursor: cursorParam,
+        raw: rawFlag
+      }
+    },
+    async ({ issueKey, spaceKey, limit, cursor, raw }) => {
+      const result = await client.searchPages({
+        query: issueKey.toUpperCase(),
+        spaceKey,
+        limit: limit ?? 25,
+        cursor
+      });
+      return respond(raw, result, formatConfluenceSearch, { structured: confluenceSearchData(result) });
+    }
+  );
+
+  server.registerTool(
     "confluence_get_space_pages",
     {
       title: "Get Confluence space pages",
