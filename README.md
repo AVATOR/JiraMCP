@@ -210,6 +210,7 @@ npm run setup    # run the setup wizard from source
 - `jira_get_project`
 - `jira_list_filters`
 - `jira_run_filter`
+- `jira_get_issue_links`
 - `jira_get_remote_links`
 - `jira_list_boards`
 - `jira_list_sprints`
