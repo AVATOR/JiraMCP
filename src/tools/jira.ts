@@ -16,6 +16,7 @@ import {
   formatCurrentUser,
   formatFields,
   formatIssue,
+  formatIssueGraph,
   formatProjects,
   formatSearch,
   formatUsers
@@ -37,6 +38,8 @@ import {
   filtersData,
   filtersOutput,
   issueData,
+  issueGraphData,
+  issueGraphOutput,
   issueOutput,
   metadataData,
   metadataOutput,
@@ -497,6 +500,47 @@ export function registerJiraTools(server: McpServer, client: JiraClient) {
           structured: { filter: { id: filter.id, name: filter.name, jql: filter.jql }, ...searchData(result) }
         }
       );
+    }
+  );
+
+  server.registerTool(
+    "jira_get_issue_links",
+    {
+      title: "Get Jira issue link graph",
+      description:
+        "Follows an issue's links (blocks, relates to, duplicates, ...), parent/epic and subtasks up to `depth` " +
+        "levels and returns every reachable issue with the relations between them, in one call. Use it to " +
+        "find what blocks an issue or what an epic contains instead of reading issues one by one.",
+      annotations: READ_ONLY_ANNOTATIONS,
+      outputSchema: issueGraphOutput,
+      inputSchema: {
+        issueKey: z.string().min(2),
+        depth: z.number().int().min(1).max(3).optional().describe("Levels to follow from the issue (default 1)."),
+        maxNodes: z.number().int().min(2).max(100).optional().describe("Stop after this many issues (default 30)."),
+        linkTypes: z
+          .array(z.string().min(1))
+          .max(10)
+          .optional()
+          .describe('Only issue links of these types, by name or wording, e.g. ["Blocks", "is blocked by"].'),
+        hierarchy: z.boolean().optional().describe("Follow parent and subtasks (default true)."),
+        children: z
+          .boolean()
+          .optional()
+          .describe(
+            "Also list the issues under each visited issue (epic children): one extra search per issue (default false)."
+          ),
+        raw: rawFlag
+      }
+    },
+    async ({ issueKey, depth, maxNodes, linkTypes, hierarchy, children, raw }) => {
+      const graph = await client.getIssueGraph(issueKey, {
+        depth: depth ?? 1,
+        maxNodes: maxNodes ?? 30,
+        linkTypes,
+        hierarchy: hierarchy ?? true,
+        children: children ?? false
+      });
+      return respond(raw, graph, formatIssueGraph, { structured: issueGraphData(graph) });
     }
   );
 

@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `jira_get_issue_links`: follows issue links, parent/epic and subtasks up to 3 levels and returns the issues with
+  the relations between them in one call.
+
 ## 0.3.0
 
 ### Added
