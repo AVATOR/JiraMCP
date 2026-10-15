@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `jira-mcp-add --stdin` reads the answers from piped input, for scripted setup.
+
 ## 0.3.0
 
 ### Added
