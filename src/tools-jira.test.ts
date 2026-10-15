@@ -723,3 +723,34 @@ test("issueCacheTtlMs 0 sends every read to Jira", async () => {
 
   assert.equal(calls.length, 2);
 });
+
+test("long Markdown results are cut by JIRA_MAX_RESPONSE_CHARS, raw JSON is not", async () => {
+  const previous = process.env.JIRA_MAX_RESPONSE_CHARS;
+  process.env.JIRA_MAX_RESPONSE_CHARS = "500";
+
+  try {
+    const { client } = await connect({
+      "/rest/api/3/search/jql": () =>
+        json({
+          issues: Array.from({ length: 40 }, (_, i) => ({
+            key: `ABC-${i + 1}`,
+            fields: { summary: `A fairly long summary to fill the table row number ${i + 1}` }
+          }))
+        })
+    });
+
+    const markdown = await call(client, "jira_search_issues", { jql: "project = ABC" });
+    assert.match(markdown.text, /\[Truncated: showing \d+ of \d+ characters/);
+    assert.match(markdown.text, /untrusted data/);
+    assert.ok(markdown.text.length < 1200);
+
+    const raw = await call(client, "jira_search_issues", { jql: "project = ABC", raw: true });
+    assert.equal(JSON.parse(raw.text).issues.length, 40);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.JIRA_MAX_RESPONSE_CHARS;
+    } else {
+      process.env.JIRA_MAX_RESPONSE_CHARS = previous;
+    }
+  }
+});
