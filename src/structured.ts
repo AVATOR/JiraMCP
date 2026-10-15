@@ -27,6 +27,7 @@ import type {
   JiraIssue,
   JiraIssueLink,
   JiraIssueRef,
+  JiraIssueGraph,
   JiraProject,
   JiraProjectDetail,
   JiraReferenceItem,
@@ -903,3 +904,30 @@ export const downloadOutput = {
   bytes: z.number(),
   inlined: z.boolean()
 };
+
+export const issueGraphOutput = {
+  ...untrustedFlag,
+  root: z.string(),
+  truncated: z.boolean(),
+  nodes: z.array(
+    z.object({
+      key: z.string(),
+      summary: str,
+      status: str,
+      type: str,
+      depth: z.number(),
+      unavailable: z.boolean().optional()
+    })
+  ),
+  edges: z.array(z.object({ from: z.string(), label: z.string(), to: z.string() }))
+};
+
+/**
+ * Structured form of jira_get_issue_links.
+ *
+ * @param graph Result of the link walk.
+ * @returns Object matching issueGraphOutput.
+ */
+export function issueGraphData(graph: JiraIssueGraph): z.infer<z.ZodObject<typeof issueGraphOutput>> {
+  return { root: graph.root, truncated: graph.truncated, nodes: graph.nodes, edges: graph.edges };
+}

@@ -10,6 +10,7 @@ import type {
   JiraField,
   JiraFilter,
   JiraIssue,
+  JiraIssueGraph,
   JiraIssueLink,
   JiraIssueRef,
   JiraProject,
@@ -669,4 +670,43 @@ export function formatSprints(sprints: JiraSprint[], boardId: string): string {
     clip(sprint.goal ?? "", EXTRA_CELL_CHARS)
   ]);
   return [header, "", table(["Id", "Name", "State", "Start", "End", "Goal"], rows)].join("\n");
+}
+
+/**
+ * Renders the links of an issue as a list of issues and a list of relations.
+ *
+ * @param graph Result of the link walk.
+ * @returns Markdown with the issues by distance and the relations between them.
+ */
+export function formatIssueGraph(graph: JiraIssueGraph): string {
+  const lines = [
+    `${graph.root} — ${graph.nodes.length} issues, ${graph.edges.length} relations, up to ${graph.depth} levels away`
+  ];
+
+  if (graph.truncated) {
+    lines.push("(The node limit was reached: raise maxNodes or lower depth to see the rest.)");
+  }
+
+  if (graph.edges.length) {
+    lines.push("", "## Relations", ...graph.edges.map((edge) => `- ${edge.from} ${edge.label} ${edge.to}`));
+  } else {
+    lines.push("", "No links found.");
+  }
+
+  lines.push(
+    "",
+    "## Issues",
+    table(
+      ["Key", "Summary", "Status", "Type", "Distance"],
+      graph.nodes.map((node) => [
+        node.key,
+        node.unavailable ? "(not readable)" : clip(node.summary ?? "", 100),
+        node.status,
+        node.type,
+        node.depth
+      ])
+    )
+  );
+
+  return lines.join("\n");
 }

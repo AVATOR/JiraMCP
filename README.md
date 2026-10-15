@@ -136,6 +136,7 @@ own `package.json` is never touched.
 
 `npx jira-mcp-add --print` runs the same questions but prints the JSON instead
 of writing it, for pasting into a config by hand.
+`--stdin` reads one answer per line from piped input instead of a terminal, for scripted setup.
 
 `npx jira-mcp-add --list` shows every Jira entry found in the client config files and asks Jira
 whether its token still works (the token itself is never printed; the exit code is 1 when one was
@@ -210,6 +211,7 @@ npm run setup    # run the setup wizard from source
 - `jira_get_project`
 - `jira_list_filters`
 - `jira_run_filter`
+- `jira_get_issue_links`
 - `jira_get_remote_links`
 - `jira_list_boards`
 - `jira_list_sprints`

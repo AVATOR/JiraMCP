@@ -27,6 +27,7 @@ test("lists every tool with an input schema", async () => {
     "jira_get_current_user",
     "jira_get_issue",
     "jira_get_issue_context",
+    "jira_get_issue_links",
     "jira_get_project",
     "jira_get_project_issues",
     "jira_get_remote_links",
@@ -887,4 +888,112 @@ test("jira_get_issue_context gathers the issue, comments, history, links and lin
   const lean = await call(client, "jira_get_issue_context", { issueKey: "ABC-1", include: ["history"] });
   assert.match(lean.text, /## History/);
   assert.doesNotMatch(lean.text, /## Comments|## Remote links|Linked Confluence pages/);
+});
+
+const ref = (key: string, summary: string, status = "To Do") => ({
+  key,
+  fields: { summary, status: { name: status }, issuetype: { name: "Task" } }
+});
+const linked = (key: string, fields: Record<string, unknown>) => () =>
+  json({ key, fields: { summary: `${key} summary`, status: { name: "To Do" }, ...fields } });
+
+test("jira_get_issue_links follows links, parent and subtasks and states every relation in the outward wording", async () => {
+  const blocks = { name: "Blocks", inward: "is blocked by", outward: "blocks" };
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1": linked("ABC-1", {
+      issuelinks: [
+        { type: blocks, outwardIssue: ref("ABC-2", "Second") },
+        { type: blocks, inwardIssue: ref("ABC-3", "Third") }
+      ],
+      parent: ref("ABC-9", "Epic"),
+      subtasks: [ref("ABC-4", "Sub")]
+    }),
+    "/rest/api/3/issue/ABC-2": linked("ABC-2", {
+      issuelinks: [
+        { type: blocks, inwardIssue: ref("ABC-1", "First") },
+        {
+          type: { name: "Relates", outward: "relates to", inward: "relates to" },
+          outwardIssue: ref("ABC-5", "Fifth")
+        }
+      ]
+    }),
+    "/rest/api/3/issue/ABC-3": linked("ABC-3", {}),
+    "/rest/api/3/issue/ABC-4": linked("ABC-4", {}),
+    "/rest/api/3/issue/ABC-9": linked("ABC-9", {})
+  });
+
+  const one = await call(client, "jira_get_issue_links", { issueKey: "ABC-1" });
+  assert.match(one.text, /ABC-1 — 5 issues, 4 relations/);
+  assert.match(one.text, /- ABC-1 blocks ABC-2/);
+  assert.match(one.text, /- ABC-3 blocks ABC-1/);
+  assert.match(one.text, /- ABC-9 parent of ABC-1/);
+  assert.match(one.text, /- ABC-1 parent of ABC-4/);
+  assert.doesNotMatch(one.text, /ABC-5/);
+  assert.equal(one.result.structuredContent.nodes.length, 5);
+
+  const two = await call(client, "jira_get_issue_links", { issueKey: "ABC-1", depth: 2 });
+  assert.match(two.text, /- ABC-2 relates to ABC-5/);
+  assert.equal(two.text.match(/ABC-1 blocks ABC-2/g)?.length, 1, "a relation seen from both ends is listed once");
+});
+
+test("jira_get_issue_links can filter link types, skip the hierarchy and add epic children", async () => {
+  const blocks = { name: "Blocks", inward: "is blocked by", outward: "blocks" };
+  const relates = { name: "Relates", inward: "relates to", outward: "relates to" };
+  const { client, calls } = await connect({
+    "/rest/api/3/issue/ABC-1": linked("ABC-1", {
+      issuelinks: [
+        { type: blocks, outwardIssue: ref("ABC-2", "Second") },
+        { type: relates, outwardIssue: ref("ABC-3", "Third") }
+      ],
+      subtasks: [ref("ABC-4", "Sub")]
+    }),
+    "/rest/api/3/search/jql": () => json({ issues: [ref("ABC-7", "Child")] })
+  });
+
+  const filtered = await call(client, "jira_get_issue_links", {
+    issueKey: "ABC-1",
+    linkTypes: ["blocks"],
+    hierarchy: false
+  });
+  assert.match(filtered.text, /ABC-1 blocks ABC-2/);
+  assert.doesNotMatch(filtered.text, /ABC-3|ABC-4/);
+  assert.ok(!calls.some((entry) => entry.url.pathname === "/rest/api/3/search/jql"));
+
+  const withChildren = await call(client, "jira_get_issue_links", { issueKey: "ABC-1", children: true });
+  assert.match(withChildren.text, /ABC-1 parent of ABC-7/);
+  const search = calls.find((entry) => entry.url.pathname === "/rest/api/3/search/jql");
+  assert.equal(search?.url.searchParams.get("jql"), 'parent = "ABC-1"');
+});
+
+test("jira_get_issue_links keeps an unreadable issue, honours maxNodes and the project allowlist", async () => {
+  const blocks = { name: "Blocks", inward: "is blocked by", outward: "blocks" };
+  const routes = {
+    "/rest/api/3/issue/ABC-1": linked("ABC-1", {
+      issuelinks: [
+        { type: blocks, outwardIssue: ref("ABC-2", "Second") },
+        { type: blocks, outwardIssue: ref("ABC-3", "Third") },
+        { type: blocks, outwardIssue: ref("OTHER-1", "Foreign") }
+      ]
+    }),
+    "/rest/api/3/issue/ABC-2": () => json({ errorMessages: ["no access"] }, { status: 403 }),
+    "/rest/api/3/issue/ABC-3": linked("ABC-3", { issuelinks: [{ type: blocks, outwardIssue: ref("ABC-8", "Eighth") }] })
+  };
+
+  const open = await connect(routes);
+  const all = await call(open.client, "jira_get_issue_links", { issueKey: "ABC-1", depth: 2 });
+  assert.match(all.text, /ABC-2 \| \(not readable\)/);
+  assert.match(all.text, /ABC-3 blocks ABC-8/);
+  assert.match(all.text, /OTHER-1/);
+
+  const limited = await call(open.client, "jira_get_issue_links", { issueKey: "ABC-1", depth: 2, maxNodes: 3 });
+  assert.match(limited.text, /node limit was reached/);
+  assert.equal(limited.result.structuredContent.truncated, true);
+  assert.equal(limited.result.structuredContent.nodes.length, 3);
+
+  await open.client.close();
+  const scoped = await connect(routes, { allowedProjects: ["ABC"] });
+  const own = await call(scoped.client, "jira_get_issue_links", { issueKey: "ABC-1" });
+  assert.doesNotMatch(own.text, /OTHER-1/);
+  const denied = await call(scoped.client, "jira_get_issue_links", { issueKey: "OTHER-1" });
+  assert.equal(denied.result.isError, true);
 });
