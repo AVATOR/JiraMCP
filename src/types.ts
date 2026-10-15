@@ -14,6 +14,9 @@ export type JiraClientConfig = {
   apiToken: string;
   defaultProject?: string;
   customFields: CustomFieldMapping[];
+  // Hard limits enforced by the server; unset means everything the token can see.
+  allowedProjects?: string[];
+  allowedSpaces?: string[];
 };
 
 // Jira objects carry many more properties (self, avatarUrls, iconUrl, ...) that are never read.
@@ -282,6 +285,7 @@ export type ConfluenceComments = {
 
 export type ConfluenceAttachment = {
   id?: string;
+  pageId?: string;
   title?: string;
   mediaType?: string;
   fileSize?: number;

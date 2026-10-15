@@ -31,6 +31,7 @@ Optional variables:
 - `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
+- `JIRA_ALLOWED_PROJECTS`, `CONFLUENCE_ALLOWED_SPACES` — comma-separated project / space keys; when set, the server reads nothing else, whatever the token can see (see _Restricting what the agent can read_)
 - `JIRA_MAX_RESPONSE_CHARS` — cap on a single Markdown result (default `60000`, `0` disables); longer results are cut with a hint on how to fetch the rest, `raw` output is never cut
 - `JIRA_MCP_DEBUG` — `1` logs every Atlassian request (method, path, status, duration, retries) to stderr; credentials are never logged
 - `JIRA_ATTACHMENT_ROOTS` — extra directories (separated like `PATH`) an explicit `outputPath` may point into; by default only `JIRA_ATTACHMENT_DIR` is allowed
@@ -64,6 +65,14 @@ Notes:
 - `JIRA_BASE_URL` is your site root, for example `https://your-company.atlassian.net`,
   with no `/jira` or `/browse/...` suffix. It must be `https://`: Basic auth sends the
   token with every request, so plain `http://` is refused (only `localhost` is allowed, for tests).
+- **Restricting what the agent can read.** The token sees everything its account sees, and a
+  prompt injection in one ticket could steer the agent elsewhere. `JIRA_ALLOWED_PROJECTS=ABC,XYZ`
+  and `CONFLUENCE_ALLOWED_SPACES=DOCS` make the server itself refuse the rest: issue and page
+  reads, JQL/CQL searches (the query is wrapped in a project/space filter), project, board, space
+  and attachment lookups. Limits: an issue that was moved to a project outside the list is only
+  caught on `jira_get_issue` (its other sub-resources are matched by the key you pass), sprint
+  issues from other projects are dropped from the listing, and `jira_download_attachment` needs
+  `issueKey` so the attachment can be tied to a project. Users, fields and statuses are not scoped.
 - Jira **Data Center / Server** (self-hosted) uses personal access tokens instead
   and is not covered by this setup.
 - Revoke a token on the same page the moment it leaks — for instance if it ends

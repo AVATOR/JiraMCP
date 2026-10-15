@@ -172,11 +172,30 @@ export function registerAttachmentTools(
       outputSchema: downloadOutput,
       inputSchema: {
         attachmentId: z.string().min(1).describe("Attachment id from jira_list_attachments."),
+        issueKey: z
+          .string()
+          .optional()
+          .describe(
+            "Issue the attachment belongs to. Required when the server restricts projects (JIRA_ALLOWED_PROJECTS), " +
+              "because an attachment id alone does not reveal its project."
+          ),
         outputPath: outputPathParam,
         inline: inlineParam
       }
     },
-    async ({ attachmentId, outputPath, inline }) => {
+    async ({ attachmentId, issueKey, outputPath, inline }) => {
+      if (jira.allowedProjects) {
+        if (!issueKey) {
+          throw new Error("issueKey is required because the server restricts projects (JIRA_ALLOWED_PROJECTS)");
+        }
+
+        // Listing also applies the project check to the issue.
+        const attachments = await jira.getAttachments(issueKey);
+        if (!attachments.some((attachment) => String(attachment.id) === attachmentId)) {
+          throw new Error(`Attachment ${attachmentId} does not belong to ${issueKey}`);
+        }
+      }
+
       const meta = await jira.getAttachmentMeta(attachmentId);
       if (Number(meta?.size) > MAX_DOWNLOAD_BYTES) {
         throw new Error(`Attachment ${attachmentId} is ${meta.size} bytes, above the ${MAX_DOWNLOAD_BYTES}-byte limit`);

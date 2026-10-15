@@ -1,5 +1,6 @@
 import type { ReferenceCache } from "./cache.js";
 import { MAX_LIST_PAGES, type AtlassianHttp } from "./http.js";
+import { Allowlist, projectOfIssue, scopeJql } from "./access.js";
 import { jqlString } from "./query.js";
 import type {
   CustomFieldMapping,
@@ -67,16 +68,71 @@ const asArray = <T>(value: unknown): T[] => (Array.isArray(value) ? (value as T[
 export class JiraClient {
   readonly defaultProject?: string;
   readonly customFields: CustomFieldMapping[];
+  // Project keys the server may read, in the case they were configured; undefined means no limit.
+  readonly allowedProjects?: string[];
+  private readonly projectAllowlist?: Allowlist;
 
   constructor(
     private readonly http: AtlassianHttp,
     private readonly cache: ReferenceCache,
-    options: { defaultProject?: string; customFields: CustomFieldMapping[] },
+    options: { defaultProject?: string; customFields: CustomFieldMapping[]; allowedProjects?: string[] },
     // Short-lived cache for issue and comment reads; without it every read goes to Jira.
     private readonly issueCache?: ReferenceCache
   ) {
     this.defaultProject = options.defaultProject;
     this.customFields = options.customFields;
+    this.allowedProjects = options.allowedProjects?.length ? options.allowedProjects : undefined;
+    this.projectAllowlist = this.allowedProjects
+      ? new Allowlist(this.allowedProjects, "Project", "JIRA_ALLOWED_PROJECTS")
+      : undefined;
+  }
+
+  /**
+   * Refuses an issue outside the allowed projects. This looks at the key prefix, so an issue that was
+   * moved to another project and is still reached through its old key is only caught by getIssue.
+   *
+   * @param issueKey Issue key.
+   */
+  private guardIssue(issueKey: string): void {
+    if (!this.projectAllowlist) {
+      return;
+    }
+
+    const project = projectOfIssue(issueKey);
+    if (!project) {
+      throw new Error(`${issueKey} is not an issue key, which JIRA_ALLOWED_PROJECTS requires`);
+    }
+    this.projectAllowlist.assert(project);
+  }
+
+  /**
+   * Refuses a project outside the allowed ones.
+   *
+   * @param projectKey Project key.
+   */
+  private guardProject(projectKey: string): void {
+    this.projectAllowlist?.assert(projectKey);
+  }
+
+  /**
+   * Keeps only issues of allowed projects, for listings the server cannot restrict in the query.
+   *
+   * @param issues Issues of a response.
+   * @returns The allowed ones.
+   */
+  private onlyAllowed<T extends { key?: string }>(issues: T[]): T[] {
+    const allowlist = this.projectAllowlist;
+    return allowlist ? issues.filter((issue) => allowlist.has(projectOfIssue(issue.key))) : issues;
+  }
+
+  /**
+   * Restricts a JQL query to the allowed projects; unchanged when there is no allowlist.
+   *
+   * @param jql JQL query.
+   * @returns JQL that can only match issues of allowed projects.
+   */
+  private scope(jql: string): string {
+    return this.allowedProjects ? scopeJql(jql, this.allowedProjects) : jql;
   }
 
   /**
@@ -87,6 +143,7 @@ export class JiraClient {
    * @returns Raw issue JSON.
    */
   async getIssue(issueKey: string, withRendered = false): Promise<JiraIssue> {
+    this.guardIssue(issueKey);
     const fields = [...BASE_ISSUE_FIELDS, ...this.customFields.map((field) => field.id)];
     const query: Record<string, string> = { fields: fields.join(",") };
 
@@ -95,7 +152,12 @@ export class JiraClient {
       query.expand = "renderedFields";
     }
 
-    return this.cached(`issue:${issueKey}:${withRendered}`, () => this.http.get<JiraIssue>(issuePath(issueKey), query));
+    const issue = await this.cached(`issue:${issueKey}:${withRendered}`, () =>
+      this.http.get<JiraIssue>(issuePath(issueKey), query)
+    );
+    // The key Jira answers with is the current one, which differs for an issue that was moved.
+    this.guardIssue(issue?.key ?? issueKey);
+    return issue;
   }
 
   /**
@@ -122,7 +184,7 @@ export class JiraClient {
     fields?: string[];
   }): Promise<JiraSearchResult> {
     const query: Record<string, string> = {
-      jql: params.jql,
+      jql: this.scope(params.jql),
       maxResults: String(params.maxResults ?? 20),
       fields: [SEARCH_FIELDS, ...(params.fields ?? [])].join(",")
     };
@@ -141,7 +203,9 @@ export class JiraClient {
    * @returns Approximate number of matching issues.
    */
   async countIssues(jql: string): Promise<number> {
-    const result = await this.http.postRead<{ count?: number }>("/rest/api/3/search/approximate-count", { jql });
+    const result = await this.http.postRead<{ count?: number }>("/rest/api/3/search/approximate-count", {
+      jql: this.scope(jql)
+    });
     return result?.count ?? 0;
   }
 
@@ -154,6 +218,7 @@ export class JiraClient {
    * @returns Raw search response.
    */
   async getProjectIssues(projectKey: string, maxResults?: number, nextPageToken?: string): Promise<JiraSearchResult> {
+    this.guardProject(projectKey);
     return this.searchIssues({
       jql: `project = ${jqlString(projectKey)} ORDER BY updated DESC`,
       maxResults,
@@ -176,7 +241,11 @@ export class JiraClient {
    * @returns Every browsable project, fetched page by page.
    */
   async getProjects(): Promise<JiraProject[]> {
-    return this.cache.get("projects", () => this.listAll<JiraProject>("/rest/api/3/project/search", "values"));
+    const projects = await this.cache.get("projects", () =>
+      this.listAll<JiraProject>("/rest/api/3/project/search", "values")
+    );
+    const allowlist = this.projectAllowlist;
+    return allowlist ? projects.filter((project) => allowlist.has(project.key)) : projects;
   }
 
   /**
@@ -208,6 +277,7 @@ export class JiraClient {
    * @returns Raw comments response.
    */
   async getComments(issueKey: string): Promise<JiraCommentPage> {
+    this.guardIssue(issueKey);
     return this.cached(`comments:${issueKey}`, () =>
       this.http.get<JiraCommentPage>(`${issuePath(issueKey)}/comment`, { orderBy: "created" })
     );
@@ -221,6 +291,7 @@ export class JiraClient {
    * @returns Raw comment.
    */
   async getComment(issueKey: string, commentId: string): Promise<JiraComment> {
+    this.guardIssue(issueKey);
     return this.cached(`comment:${issueKey}:${commentId}`, () =>
       this.http.get<JiraComment>(`${issuePath(issueKey)}/comment/${encodeURIComponent(commentId)}`)
     );
@@ -237,6 +308,7 @@ export class JiraClient {
     issueKey: string,
     params: { limit: number; order: "asc" | "desc"; since?: Date }
   ): Promise<{ comments: JiraComment[]; total: number }> {
+    this.guardIssue(issueKey);
     const key = `find-comments:${issueKey}:${params.limit}:${params.order}:${params.since?.toISOString() ?? ""}`;
     return this.cached(key, () => this.loadComments(issueKey, params));
   }
@@ -298,6 +370,7 @@ export class JiraClient {
    * @returns Attachment objects of the issue.
    */
   async getAttachments(issueKey: string): Promise<JiraAttachment[]> {
+    this.guardIssue(issueKey);
     const issue = await this.http.get<JiraIssue>(issuePath(issueKey), { fields: "attachment" });
     return Array.isArray(issue?.fields?.attachment) ? issue.fields.attachment.filter(Boolean) : [];
   }
@@ -374,6 +447,7 @@ export class JiraClient {
    * @returns Changelog entries.
    */
   async getChangelog(issueKey: string): Promise<JiraChangelogEntry[]> {
+    this.guardIssue(issueKey);
     return this.listAll<JiraChangelogEntry>(`${issuePath(issueKey)}/changelog`, "values");
   }
 
@@ -384,6 +458,7 @@ export class JiraClient {
    * @returns Worklogs in the order Jira returns them.
    */
   async getWorklogs(issueKey: string): Promise<JiraWorklog[]> {
+    this.guardIssue(issueKey);
     return this.listAll<JiraWorklog>(`${issuePath(issueKey)}/worklog`, "worklogs");
   }
 
@@ -394,6 +469,7 @@ export class JiraClient {
    * @returns Available transitions.
    */
   async getTransitions(issueKey: string): Promise<JiraTransition[]> {
+    this.guardIssue(issueKey);
     const result = await this.http.get<{ transitions?: JiraTransition[] }>(`${issuePath(issueKey)}/transitions`);
     return result?.transitions ?? [];
   }
@@ -422,6 +498,7 @@ export class JiraClient {
    * @returns The project.
    */
   async getProject(projectKey: string): Promise<JiraProjectDetail> {
+    this.guardProject(projectKey);
     return this.http.get<JiraProjectDetail>(`/rest/api/3/project/${encodeURIComponent(projectKey)}`);
   }
 
@@ -458,6 +535,7 @@ export class JiraClient {
    * @returns Remote links.
    */
   async getRemoteLinks(issueKey: string): Promise<JiraRemoteLink[]> {
+    this.guardIssue(issueKey);
     return asArray<JiraRemoteLink>(await this.http.get<unknown>(`${issuePath(issueKey)}/remotelink`));
   }
 
@@ -473,11 +551,29 @@ export class JiraClient {
       query.name = params.name;
     }
     if (params.projectKey) {
+      this.guardProject(params.projectKey);
       query.projectKeyOrId = params.projectKey;
     }
 
     const result = await this.http.get<JiraPage>("/rest/agile/1.0/board", query);
-    return (result?.values ?? []) as JiraBoard[];
+    const boards = (result?.values ?? []) as JiraBoard[];
+    const allowlist = this.projectAllowlist;
+    // A board without a project location cannot be shown to belong to an allowed project.
+    return allowlist ? boards.filter((board) => allowlist.has(board.location?.projectKey)) : boards;
+  }
+
+  /**
+   * Refuses a board that does not belong to an allowed project.
+   *
+   * @param boardId Board id.
+   */
+  private async guardBoard(boardId: string): Promise<void> {
+    if (!this.projectAllowlist) {
+      return;
+    }
+
+    const board = await this.http.get<JiraBoard>(`/rest/agile/1.0/board/${encodeURIComponent(boardId)}`);
+    this.projectAllowlist.assert(board?.location?.projectKey);
   }
 
   /**
@@ -488,6 +584,7 @@ export class JiraClient {
    * @returns Sprints, oldest first.
    */
   async getSprints(boardId: string, state?: string): Promise<JiraSprint[]> {
+    await this.guardBoard(boardId);
     return this.listAll<JiraSprint>(
       `/rest/agile/1.0/board/${encodeURIComponent(boardId)}/sprint`,
       "values",
@@ -503,10 +600,18 @@ export class JiraClient {
    * @returns Agile search response with total and startAt.
    */
   async getSprintIssues(sprintId: string, params: { limit: number; startAt: number }): Promise<JiraSprintIssues> {
-    return this.http.get<JiraSprintIssues>(`/rest/agile/1.0/sprint/${encodeURIComponent(sprintId)}/issue`, {
-      maxResults: String(params.limit),
-      startAt: String(params.startAt),
-      fields: SEARCH_FIELDS
-    });
+    const result = await this.http.get<JiraSprintIssues>(
+      `/rest/agile/1.0/sprint/${encodeURIComponent(sprintId)}/issue`,
+      {
+        maxResults: String(params.limit),
+        startAt: String(params.startAt),
+        fields: SEARCH_FIELDS
+      }
+    );
+
+    // A sprint can mix projects; the agile API cannot filter by them, so other projects' issues are dropped.
+    return this.allowedProjects && Array.isArray(result?.issues)
+      ? { ...result, issues: this.onlyAllowed(result.issues) }
+      : result;
   }
 }
