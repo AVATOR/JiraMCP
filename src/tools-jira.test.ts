@@ -12,9 +12,11 @@ test("lists every tool with an input schema", async () => {
 
   assert.deepEqual(tools.map((tool) => tool.name).sort(), [
     "confluence_download_attachment",
+    "confluence_find_pages_for_issue",
     "confluence_get_page",
     "confluence_get_page_children",
     "confluence_get_page_comments",
+    "confluence_get_page_issues",
     "confluence_get_page_versions",
     "confluence_get_space_pages",
     "confluence_list_attachments",

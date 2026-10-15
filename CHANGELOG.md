@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- `confluence_find_pages_for_issue` (pages that mention an issue key) and `confluence_get_page_issues` (Jira issues
+  a page refers to, with summary and status).
+
 ## 0.3.0
 
 ### Added
