@@ -1,6 +1,6 @@
 {
   "name": "jira-readonly-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Read-only MCP server for Jira Cloud and Confluence, with an interactive installer",
   "license": "MIT",

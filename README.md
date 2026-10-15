@@ -31,6 +31,7 @@ Optional variables:
 - `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
+- `JIRA_ATTACHMENT_ROOTS` — extra directories (separated like `PATH`) an explicit `outputPath` may point into; by default only `JIRA_ATTACHMENT_DIR` is allowed
 - `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
 - `MCP_TRANSPORT`, `MCP_HTTP_HOST`, `MCP_HTTP_PORT`, `MCP_HTTP_TOKEN` — Streamable HTTP, see below
 
@@ -192,9 +193,30 @@ npm run setup    # run the setup wizard from source
 - `jira_list_sprints`
 - `jira_get_sprint_issues`
 - `confluence_get_page`
+- `confluence_get_page_children`
+- `confluence_get_page_comments`
+- `confluence_list_attachments`
+- `confluence_download_attachment`
+- `confluence_get_page_versions`
 - `confluence_search_pages`
 - `confluence_get_space_pages`
 - `confluence_list_spaces`
+
+## MCP Resources and Prompts
+
+Resources let a client attach an issue or page as context without a tool call:
+
+- `jira://issue/{key}` — an issue as Markdown, e.g. `jira://issue/ABC-123`
+- `confluence://page/{id}` — a page as Markdown, e.g. `confluence://page/123456`
+
+Bodies above 40,000 characters are cut, with a pointer to `jira_get_issue` or `confluence_get_page`
+for the rest.
+
+Prompts are ready-made instructions that name the tools to call:
+
+- `summarize_issue` (`issueKey`) — state, decisions, open questions and next steps
+- `release_notes` (`jql`, optional `audience`) — release notes grouped by issue type
+- `summarize_page` (`pageId`) — key points and action items of a Confluence page
 
 ## Structured output
 
@@ -209,10 +231,11 @@ tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
   `search/approximate-count`, behind an allowlist); every request goes through
   a single HTTP client (30 s timeout, retries on HTTP 429/502/503/504 honouring `Retry-After`).
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
-- Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
-  server instructions tell the client not to follow instructions found in it.
+- Jira/Confluence text is untrusted: Markdown results end with a note saying so, `structuredContent`
+  carries `untrusted: true`, and the server instructions tell the client not to follow instructions found in it.
 - Issue and comment reads are cached for 30 s (`JIRA_ISSUE_CACHE_SECONDS`), so a repeated read can
   be that stale.
 - The only local side effect is `jira_download_attachment` writing a file (off in HTTP mode). An explicit
-  `outputPath` never overwrites an existing file, since attachment content is untrusted.
+  `outputPath` never overwrites an existing file and must stay inside `JIRA_ATTACHMENT_DIR` or a
+  directory from `JIRA_ATTACHMENT_ROOTS` (symlinks are resolved), since attachment content is untrusted.
   Downloads above 100 MB are refused.
