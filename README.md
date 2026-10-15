@@ -31,6 +31,7 @@ Optional variables:
 - `JIRA_DEFAULT_PROJECT` — project used by `jira_get_project_issues` when no key is given
 - `JIRA_CUSTOM_FIELDS` — see below
 - `JIRA_ATTACHMENT_DIR` — where downloaded attachments go (default: `<tmp>/jira-attachments`)
+- `JIRA_MAX_RESPONSE_CHARS` — cap on a single Markdown result (default `60000`, `0` disables); longer results are cut with a hint on how to fetch the rest, `raw` output is never cut
 - `JIRA_MCP_DEBUG` — `1` logs every Atlassian request (method, path, status, duration, retries) to stderr; credentials are never logged
 - `JIRA_ATTACHMENT_ROOTS` — extra directories (separated like `PATH`) an explicit `outputPath` may point into; by default only `JIRA_ATTACHMENT_DIR` is allowed
 - `JIRA_ISSUE_CACHE_SECONDS` — how long issue and comment reads are reused (default `30`, `0` disables)
