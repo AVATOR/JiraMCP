@@ -36,3 +36,17 @@ test("retryDelayMs honours Retry-After seconds and dates, else backs off", () =>
   assert.equal(retryDelayMs(withHeader(), 0), 1000);
   assert.equal(retryDelayMs(withHeader(), 2), 4000);
 });
+
+test("truncateMarkdown cuts at a line, closes an open code fence and points at narrower requests", async () => {
+  const { truncateMarkdown } = await import("./tools/shared.js");
+  const text = ["intro", "```", ...Array.from({ length: 50 }, (_, i) => `line ${i}`), "```"].join("\n");
+
+  assert.equal(truncateMarkdown(text, 0), text);
+  assert.equal(truncateMarkdown(text, text.length), text);
+
+  const cut = truncateMarkdown(text, 100);
+  assert.ok(cut.startsWith("intro\n```\nline 0"));
+  assert.match(cut, /\n```\n\n\[Truncated: showing \d+ of \d+ characters\./);
+  assert.match(cut, /`limit`/);
+  assert.ok(!cut.includes("line 49"));
+});

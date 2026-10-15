@@ -1,6 +1,6 @@
 {
   "name": "jira-readonly-mcp",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "type": "module",
   "description": "Read-only MCP server for Jira Cloud and Confluence, with an interactive installer",
   "license": "MIT",
@@ -37,7 +37,7 @@
     "dev": "tsx src/index.ts",
     "setup": "tsx src/cli/add.ts",
     "test": "npm run build && node --test dist/*.test.js",
-    "test:coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-exclude='dist/**/*.test.js' --test-coverage-exclude='dist/test-support.js' --test-coverage-lines=90 --test-coverage-branches=70 --test-coverage-functions=90 dist/*.test.js",
+    "test:coverage": "npm run build && node --test --experimental-test-coverage --test-coverage-exclude='dist/**/*.test.js' --test-coverage-exclude='dist/test-support.js' --test-coverage-include='dist/**/*.js' --test-coverage-lines=90 --test-coverage-branches=70 --test-coverage-functions=90 dist/*.test.js",
     "prepublishOnly": "npm run build",
     "prepare": "git rev-parse --git-dir >/dev/null 2>&1 && git config core.hooksPath .githooks || true",
     "lint": "eslint .",

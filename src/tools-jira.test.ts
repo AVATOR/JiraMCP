@@ -1,7 +1,8 @@
 // End-to-end tests of the Jira tools (and the cross-cutting result format) through an in-memory MCP client.
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { call, connect, downloadDir, json } from "./test-support.js";
 
@@ -282,6 +283,64 @@ test("jira_download_attachment never overwrites an explicit output file", async 
   assert.equal(result.isError, true);
   assert.match(text, /Refusing to overwrite/);
   assert.equal(await readFile(existing, "utf8"), "precious");
+});
+
+test("jira_download_attachment refuses an output path outside the download directory", async () => {
+  const { client, calls } = await connect(attachmentRoutes({}));
+  const outside = path.join(os.tmpdir(), `jira-mcp-outside-${process.pid}.txt`);
+
+  for (const outputPath of [outside, "../escape.txt", "/etc/jira-mcp-test"]) {
+    const { result, text } = await call(client, "jira_download_attachment", { attachmentId: "10", outputPath });
+    assert.equal(result.isError, true);
+    assert.match(text, /outputPath must be inside/);
+  }
+
+  assert.ok(!calls.some((entry) => entry.url.pathname.includes("/content/")));
+});
+
+test("jira_download_attachment resolves a relative output path inside the download directory", async () => {
+  const { client } = await connect(attachmentRoutes({}));
+
+  const { result } = await call(client, "jira_download_attachment", {
+    attachmentId: "10",
+    outputPath: "nested/shot.png",
+    inline: false
+  });
+
+  assert.notEqual(result.isError, true);
+  assert.deepEqual(await readFile(path.join(downloadDir, "nested", "shot.png")), PNG);
+});
+
+test("jira_download_attachment accepts directories listed in JIRA_ATTACHMENT_ROOTS", async (t) => {
+  const extra = await mkdtemp(path.join(os.tmpdir(), "jira-mcp-root-"));
+  process.env.JIRA_ATTACHMENT_ROOTS = extra;
+  t.after(async () => {
+    delete process.env.JIRA_ATTACHMENT_ROOTS;
+    await rm(extra, { recursive: true, force: true });
+  });
+  const { client } = await connect(attachmentRoutes({}));
+
+  const { result } = await call(client, "jira_download_attachment", {
+    attachmentId: "10",
+    outputPath: extra,
+    inline: false
+  });
+
+  assert.notEqual(result.isError, true);
+  assert.deepEqual(await readFile(path.join(extra, "10-my_shot.png")), PNG);
+});
+
+test("structured results carry the untrusted mark when they hold third-party text", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1": () => json({ key: "ABC-1", fields: { summary: "Hello" } }),
+    "/rest/api/3/field": () => json([{ id: "summary", name: "Summary" }])
+  });
+
+  const issue = await call(client, "jira_get_issue", { issueKey: "ABC-1" });
+  assert.equal(issue.result.structuredContent.untrusted, true);
+
+  const fields = await call(client, "jira_list_fields", {});
+  assert.equal(fields.result.structuredContent.untrusted, undefined);
 });
 
 test("jira_download_attachment refuses oversized files before downloading", async () => {
@@ -722,4 +781,35 @@ test("issueCacheTtlMs 0 sends every read to Jira", async () => {
   await call(client, "jira_get_issue", { issueKey: "ABC-1" });
 
   assert.equal(calls.length, 2);
+});
+
+test("long Markdown results are cut by JIRA_MAX_RESPONSE_CHARS, raw JSON is not", async () => {
+  const previous = process.env.JIRA_MAX_RESPONSE_CHARS;
+  process.env.JIRA_MAX_RESPONSE_CHARS = "500";
+
+  try {
+    const { client } = await connect({
+      "/rest/api/3/search/jql": () =>
+        json({
+          issues: Array.from({ length: 40 }, (_, i) => ({
+            key: `ABC-${i + 1}`,
+            fields: { summary: `A fairly long summary to fill the table row number ${i + 1}` }
+          }))
+        })
+    });
+
+    const markdown = await call(client, "jira_search_issues", { jql: "project = ABC" });
+    assert.match(markdown.text, /\[Truncated: showing \d+ of \d+ characters/);
+    assert.match(markdown.text, /untrusted data/);
+    assert.ok(markdown.text.length < 1200);
+
+    const raw = await call(client, "jira_search_issues", { jql: "project = ABC", raw: true });
+    assert.equal(JSON.parse(raw.text).issues.length, 40);
+  } finally {
+    if (previous === undefined) {
+      delete process.env.JIRA_MAX_RESPONSE_CHARS;
+    } else {
+      process.env.JIRA_MAX_RESPONSE_CHARS = previous;
+    }
+  }
 });
