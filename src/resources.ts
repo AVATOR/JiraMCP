@@ -5,22 +5,62 @@ import type { ConfluenceClient } from "./confluence-client.js";
 import type { JiraClient } from "./jira-client.js";
 import { toMarkdownResult } from "./tools/shared.js";
 
-// A resource is read whole into the client's context, so very large bodies are cut with a pointer to the tool.
+// A resource is read whole into the client's context, so a body is served in parts of at most this size;
+// each part names the URI of the next one (?offset=).
 export const MAX_RESOURCE_CHARS = 40_000;
 
 /**
- * Cuts a resource body to the size limit and flags it as untrusted third-party text.
+ * Serves one part of a resource body and flags it as untrusted third-party text.
  *
- * @param text Markdown body.
- * @param hint What to call to read the rest, shown when the body was cut.
+ * @param text Whole Markdown body.
+ * @param uri Resource URI without a query, used to point at the next part.
+ * @param offset Character offset of the part to serve.
  * @returns Text for a resource's contents entry.
  */
-function limited(text: string, hint: string): string {
-  const body =
-    text.length > MAX_RESOURCE_CHARS
-      ? `${text.slice(0, MAX_RESOURCE_CHARS)}\n\n[truncated: ${text.length - MAX_RESOURCE_CHARS} more characters; ${hint}]`
-      : text;
+export function resourcePart(text: string, uri: string, offset: number): string {
+  const start = Math.min(offset, text.length);
+  let end = Math.min(start + MAX_RESOURCE_CHARS, text.length);
+
+  // Break at a line, unless that would make the part tiny.
+  if (end < text.length) {
+    const lineEnd = text.lastIndexOf("\n", end);
+    end = lineEnd > start + MAX_RESOURCE_CHARS / 2 ? lineEnd : end;
+  }
+
+  let body = text.slice(start, end);
+
+  if (start > 0 || end < text.length) {
+    // Do not leave a code fence open, it would swallow the note.
+    if ((body.match(/^```/gm) ?? []).length % 2 === 1) {
+      body += "\n```";
+    }
+
+    body +=
+      `\n\n[Characters ${start}-${end} of ${text.length}.` +
+      (end < text.length ? ` Next part: ${uri}/offset/${end}` : " End of resource.") +
+      "]";
+  }
+
   return toMarkdownResult(body).content[0].text;
+}
+
+/**
+ * Reads the optional offset variable of a resource URI (…/offset/N).
+ *
+ * @param value Variable from the URI template match.
+ * @returns A non-negative integer offset, 0 when absent.
+ */
+function offsetOf(value: string | string[] | undefined): number {
+  if (value === undefined) {
+    return 0;
+  }
+
+  const offset = Number(Array.isArray(value) ? value[0] : value);
+  if (!Number.isInteger(offset) || offset < 0) {
+    throw new Error("offset must be a non-negative integer");
+  }
+
+  return offset;
 }
 
 /**
@@ -41,53 +81,72 @@ function variable(value: string | string[]): string {
  * @param confluence Confluence client the page resource reads through.
  */
 export function registerResources(server: McpServer, jira: JiraClient, confluence: ConfluenceClient) {
+  const issueDescription =
+    "A Jira issue as Markdown, e.g. jira://issue/ABC-123. Long issues come in parts: use the Next part URI " +
+    "(jira://issue/ABC-123/offset/N) that ends the previous part. Comments: use jira_get_comments.";
+  const pageDescription =
+    "A Confluence page as Markdown, e.g. confluence://page/123456. Long pages come in parts: use the Next part URI " +
+    "(confluence://page/123456/offset/N) that ends the previous part.";
+
+  const readIssue = async (uri: URL, key: string | string[], offset?: string | string[]) => {
+    const issueKey = variable(key);
+    const issue = await jira.getIssue(issueKey);
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: resourcePart(formatIssue(issue, jira.customFields), `jira://issue/${issueKey}`, offsetOf(offset))
+        }
+      ]
+    };
+  };
+
+  const readPage = async (uri: URL, id: string | string[], offset?: string | string[]) => {
+    const pageId = variable(id);
+    const page = await confluence.getPage(pageId);
+    const ancestors = await confluence.getAncestors(pageId).catch(() => []);
+    return {
+      contents: [
+        {
+          uri: uri.href,
+          mimeType: "text/markdown",
+          text: resourcePart(
+            formatConfluencePage(page, confluence.baseUrl, ancestors),
+            `confluence://page/${pageId}`,
+            offsetOf(offset)
+          )
+        }
+      ]
+    };
+  };
+
+  const issueMeta = { title: "Jira issue", description: issueDescription, mimeType: "text/markdown" };
+  const pageMeta = { title: "Confluence page", description: pageDescription, mimeType: "text/markdown" };
+
   server.registerResource(
     "jira-issue",
     new ResourceTemplate("jira://issue/{key}", { list: undefined }),
-    {
-      title: "Jira issue",
-      description: "A Jira issue as Markdown, e.g. jira://issue/ABC-123. Comments: use jira_get_comments.",
-      mimeType: "text/markdown"
-    },
-    async (uri, { key }) => {
-      const issue = await jira.getIssue(variable(key));
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "text/markdown",
-            text: limited(formatIssue(issue, jira.customFields), "call jira_get_issue for the full issue")
-          }
-        ]
-      };
-    }
+    issueMeta,
+    (uri, { key }) => readIssue(uri, key)
   );
-
+  server.registerResource(
+    "jira-issue-part",
+    new ResourceTemplate("jira://issue/{key}/offset/{offset}", { list: undefined }),
+    issueMeta,
+    (uri, { key, offset }) => readIssue(uri, key, offset)
+  );
   server.registerResource(
     "confluence-page",
     new ResourceTemplate("confluence://page/{id}", { list: undefined }),
-    {
-      title: "Confluence page",
-      description: "A Confluence page as Markdown, e.g. confluence://page/123456.",
-      mimeType: "text/markdown"
-    },
-    async (uri, { id }) => {
-      const pageId = variable(id);
-      const page = await confluence.getPage(pageId);
-      const ancestors = await confluence.getAncestors(pageId).catch(() => []);
-      return {
-        contents: [
-          {
-            uri: uri.href,
-            mimeType: "text/markdown",
-            text: limited(
-              formatConfluencePage(page, confluence.baseUrl, ancestors),
-              "call confluence_get_page for the full page"
-            )
-          }
-        ]
-      };
-    }
+    pageMeta,
+    (uri, { id }) => readPage(uri, id)
+  );
+  server.registerResource(
+    "confluence-page-part",
+    new ResourceTemplate("confluence://page/{id}/offset/{offset}", { list: undefined }),
+    pageMeta,
+    (uri, { id, offset }) => readPage(uri, id, offset)
   );
 }
 

@@ -32,7 +32,8 @@ test("confluence://page/{id} reads a page as Markdown", async () => {
   assert.match(text, /Do \*\*this\*\*/);
 });
 
-test("resources cut very large bodies and point at the tool", async () => {
+test("resources serve very large bodies in parts that name the next offset", async () => {
+  const lines = Array.from({ length: 3000 }, (_, i) => `line ${i} ${"x".repeat(40)}`);
   const { client } = await connect({
     "/rest/api/3/issue/ABC-1": () =>
       json({
@@ -42,17 +43,44 @@ test("resources cut very large bodies and point at the tool", async () => {
           description: {
             type: "doc",
             version: 1,
-            content: [{ type: "paragraph", content: [{ type: "text", text: "x".repeat(MAX_RESOURCE_CHARS * 2) }] }]
+            content: lines.map((text) => ({ type: "paragraph", content: [{ type: "text", text }] }))
           }
         }
       })
   });
 
-  const result = await client.readResource({ uri: "jira://issue/ABC-1" });
-  const text = (result.contents[0] as { text: string }).text;
+  const read = async (uri: string) => ((await client.readResource({ uri })).contents[0] as { text: string }).text;
 
-  assert.match(text, /\[truncated: \d+ more characters; call jira_get_issue/);
-  assert.ok(text.length < MAX_RESOURCE_CHARS + 500);
+  const first = await read("jira://issue/ABC-1");
+  assert.ok(first.length < MAX_RESOURCE_CHARS + 600);
+  assert.match(first, /\[Characters 0-\d+ of \d+\. Next part: jira:\/\/issue\/ABC-1\/offset\/\d+\]/);
+  assert.match(first, /untrusted data/);
+
+  // Following the pointers reads the whole body, each line exactly once.
+  let text = first;
+  let collected = first.split("\n\n[Characters")[0];
+  for (let guard = 0; guard < 10; guard++) {
+    const next = text.match(/Next part: (\S+?)\]/)?.[1];
+    if (!next) {
+      break;
+    }
+    text = await read(next);
+    collected += "\n" + text.split("\n\n[Characters")[0];
+  }
+
+  assert.match(text, /End of resource\./);
+  for (const index of [0, 1500, 2999]) {
+    assert.equal(collected.split(`line ${index} `).length - 1, 1, `line ${index}`);
+  }
+});
+
+test("a bad offset is an error", async () => {
+  const { client } = await connect({
+    "/rest/api/3/issue/ABC-1": () => json({ key: "ABC-1", fields: { summary: "Hi" } })
+  });
+
+  await assert.rejects(client.readResource({ uri: "jira://issue/ABC-1/offset/-5" }), /offset/);
+  await assert.rejects(client.readResource({ uri: "jira://issue/ABC-1/offset/abc" }), /offset/);
 });
 
 test("a missing issue resource fails with the Jira error", async () => {
@@ -91,6 +119,8 @@ test("resource templates are advertised", async () => {
 
   assert.deepEqual(resourceTemplates.map((entry) => entry.uriTemplate).sort(), [
     "confluence://page/{id}",
-    "jira://issue/{key}"
+    "confluence://page/{id}/offset/{offset}",
+    "jira://issue/{key}",
+    "jira://issue/{key}/offset/{offset}"
   ]);
 });

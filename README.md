@@ -230,8 +230,10 @@ Resources let a client attach an issue or page as context without a tool call:
 - `jira://issue/{key}` — an issue as Markdown, e.g. `jira://issue/ABC-123`
 - `confluence://page/{id}` — a page as Markdown, e.g. `confluence://page/123456`
 
-Bodies above 40,000 characters are cut, with a pointer to `jira_get_issue` or `confluence_get_page`
-for the rest.
+A body is served in parts of at most 40,000 characters, cut at a line. Every part but the last ends
+with the URI of the next one, e.g. `jira://issue/ABC-123/offset/39871` or
+`confluence://page/123456/offset/39871`; the issue resource holds the fields and description, and the
+comments come from `jira_get_comments`.
 
 Prompts are ready-made instructions that name the tools to call:
 
