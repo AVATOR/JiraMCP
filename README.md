@@ -59,7 +59,8 @@ Notes:
   the token on a dedicated Atlassian account with access to just those projects.
   The server is read-only regardless, but the token itself is not.
 - `JIRA_BASE_URL` is your site root, for example `https://your-company.atlassian.net`,
-  with no `/jira` or `/browse/...` suffix.
+  with no `/jira` or `/browse/...` suffix. It must be `https://`: Basic auth sends the
+  token with every request, so plain `http://` is refused (only `localhost` is allowed, for tests).
 - Jira **Data Center / Server** (self-hosted) uses personal access tokens instead
   and is not covered by this setup.
 - Revoke a token on the same page the moment it leaks — for instance if it ends

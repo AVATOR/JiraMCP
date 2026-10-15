@@ -3,7 +3,7 @@ import { writeFile, mkdir, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { basicAuthHeader } from "../auth.js";
+import { baseUrlProblem, basicAuthHeader } from "../auth.js";
 import { ensureGitIgnored, getIn, readJson, targets } from "./config-files.js";
 import { ask, confirm, log, select, styles } from "./prompt.js";
 
@@ -177,7 +177,8 @@ async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; sug
   const baseUrl = normalizeBaseUrl(
     await ask("Jira base URL", {
       defaultValue: process.env.JIRA_BASE_URL?.trim() || "",
-      validate: (value) => (value ? undefined : "Required, e.g. your-company.atlassian.net")
+      validate: (value) =>
+        value ? baseUrlProblem(normalizeBaseUrl(value)) : "Required, e.g. your-company.atlassian.net"
     })
   );
 
