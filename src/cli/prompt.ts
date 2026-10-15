@@ -1,6 +1,26 @@
 import readline from "node:readline";
 
 const isTTY = process.stdin.isTTY === true;
+// `--stdin` reads one answer per line from piped input, for scripted setup and tests.
+const scripted = !isTTY && process.argv.includes("--stdin");
+let scriptedLines: AsyncIterator<string> | undefined;
+
+/**
+ * Reads the next answer line from piped stdin; the whole input shares one readline interface so
+ * lines buffered ahead of a question are not lost.
+ *
+ * @returns The next line of input.
+ */
+async function nextScriptedLine(): Promise<string> {
+  scriptedLines ??= readline.createInterface({ input: process.stdin })[Symbol.asyncIterator]();
+  const next = await scriptedLines.next();
+
+  if (next.done) {
+    throw new Error("The piped input ended before every question was answered.");
+  }
+
+  return next.value;
+}
 
 /**
  * Writes to stdout, which is free to use in the setup wizard (it is not the MCP channel).
@@ -74,23 +94,33 @@ function question(rl: readline.Interface, query: string, secret: boolean): Promi
 }
 
 /**
- * Prompts until the answer passes validation; fails when there is no TTY.
+ * Prompts until the answer passes validation; fails when there is no TTY (unless --stdin is given).
  *
  * @param label Question text.
  * @param options Default value, secret mode and validation.
  * @returns The trimmed answer, or the default when it is empty.
  */
 export async function ask(label: string, options: AskOptions = {}): Promise<string> {
-  if (!isTTY) {
+  if (!isTTY && !scripted) {
     throw new Error("Interactive setup needs a TTY. Run `npx jira-mcp-add` from a terminal.");
   }
 
-  const rl = createInterface();
+  const rl = scripted ? undefined : createInterface();
 
   try {
     for (;;) {
       const suffix = options.defaultValue ? styles.dim(` [${options.defaultValue}]`) : "";
-      const raw = await question(rl, `${styles.cyan("?")} ${label}${suffix}: `, options.secret === true);
+      const prompt = `${styles.cyan("?")} ${label}${suffix}: `;
+      let raw: string;
+
+      if (rl) {
+        raw = await question(rl, prompt, options.secret === true);
+      } else {
+        write(prompt);
+        raw = await nextScriptedLine();
+        write("\n");
+      }
+
       const value = raw.trim() || options.defaultValue?.trim() || "";
       const error = options.validate?.(value);
 
@@ -102,7 +132,7 @@ export async function ask(label: string, options: AskOptions = {}): Promise<stri
       return value;
     }
   } finally {
-    rl.close();
+    rl?.close();
   }
 }
 
