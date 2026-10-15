@@ -8,6 +8,9 @@ import type { JsonValue } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
+// Everything one request may spend, retries and waiting included. MCP clients typically give up
+// after about a minute, so a longer budget only burns Atlassian quota for an answer nobody reads.
+export const REQUEST_DEADLINE_MS = 45_000;
 // Rate limiting and transient gateway errors; everything else is returned to the caller as-is.
 const RETRY_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ERROR_BODY_CHARS = 1000;
@@ -94,6 +97,8 @@ export class AtlassianHttp {
    * @returns The response, after retries.
    */
   private async send(url: URL, accept: string, body?: string): Promise<Response> {
+    const deadline = Date.now() + REQUEST_DEADLINE_MS;
+
     for (let attempt = 0; ; attempt++) {
       const response = await this.fetchImpl(url, {
         method: body === undefined ? "GET" : "POST",
@@ -104,13 +109,18 @@ export class AtlassianHttp {
         },
         body,
         redirect: "follow",
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+        signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now())))
       });
 
       if (RETRY_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
-        await response.body?.cancel();
-        await sleep(retryDelayMs(response, attempt));
-        continue;
+        const delay = retryDelayMs(response, attempt);
+
+        // Waiting would run past the deadline: hand the failure to the caller now instead of sleeping.
+        if (Date.now() + delay < deadline) {
+          await response.body?.cancel();
+          await sleep(delay);
+          continue;
+        }
       }
 
       return response;

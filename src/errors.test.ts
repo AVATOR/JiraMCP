@@ -70,3 +70,22 @@ for (const status of [502, 504]) {
     assert.equal(calls.length, 2);
   });
 }
+
+test("a retry that would pass the request deadline is not waited for", async () => {
+  const { AtlassianHttp } = await import("./http.js");
+  let calls = 0;
+  const fetchImpl = (() => {
+    calls++;
+    return Promise.resolve(new Response("busy", { status: 429, headers: { "retry-after": "50" } }));
+  }) as typeof fetch;
+  const http = new AtlassianHttp(
+    { baseUrl: "https://example.atlassian.net", email: "a@b.c", apiToken: "t" },
+    fetchImpl
+  );
+
+  const started = Date.now();
+  await assert.rejects(http.get("/rest/api/3/myself"), /429/);
+
+  assert.equal(calls, 1);
+  assert.ok(Date.now() - started < 5000);
+});

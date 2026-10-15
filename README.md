@@ -207,7 +207,7 @@ tables. `raw: true` only changes the text part to the unprocessed Jira JSON.
 
 - The server uses Jira/Confluence REST API GET endpoints (plus one read-only POST,
   `search/approximate-count`, behind an allowlist); every request goes through
-  a single HTTP client (30 s timeout, retries on HTTP 429/502/503/504 honouring `Retry-After`).
+  a single HTTP client (30 s per attempt, 45 s in total; retries on HTTP 429/502/503/504 honouring `Retry-After`, but never waiting past the 45 s).
 - No MCP tools for mutations are registered; every tool is annotated `readOnlyHint`.
 - Jira/Confluence text is untrusted: Markdown results end with a note saying so, and the
   server instructions tell the client not to follow instructions found in it.
