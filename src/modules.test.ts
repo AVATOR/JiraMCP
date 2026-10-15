@@ -115,3 +115,17 @@ test("ReferenceCache stays bounded: expired and oldest entries make room", async
   await cache.get("key-0", () => Promise.resolve(++loads));
   assert.equal(loads, 1201);
 });
+
+test("a base URL must be https, plain http only for localhost", () => {
+  const config = (baseUrl: string) => ({ baseUrl, email: "a@b.c", apiToken: "t" });
+
+  assert.doesNotThrow(() => new AtlassianHttp(config("https://x.atlassian.net")));
+  assert.doesNotThrow(() => new AtlassianHttp(config("http://localhost:8080")));
+  assert.doesNotThrow(() => new AtlassianHttp(config("http://127.0.0.1:3000")));
+  assert.doesNotThrow(() => new AtlassianHttp(config("http://jira.localhost")));
+
+  assert.throws(() => new AtlassianHttp(config("http://x.atlassian.net")), /must use https/);
+  assert.throws(() => new AtlassianHttp(config("http://localhost.evil.example")), /must use https/);
+  assert.throws(() => new AtlassianHttp(config("ftp://x.atlassian.net")), /must use https/);
+  assert.throws(() => new AtlassianHttp(config("x.atlassian.net")), /not a valid URL/);
+});

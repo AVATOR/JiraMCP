@@ -3,8 +3,9 @@ import { writeFile, mkdir, access } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { basicAuthHeader } from "../auth.js";
+import { baseUrlProblem, basicAuthHeader } from "../auth.js";
 import { ensureGitIgnored, getIn, readJson, targets } from "./config-files.js";
+import { runList, runRemove } from "./manage.js";
 import { ask, confirm, log, select, styles } from "./prompt.js";
 
 const PACKAGE_NAME = "jira-readonly-mcp";
@@ -177,7 +178,8 @@ async function buildEntry(printOnly: boolean): Promise<{ entry: ServerEntry; sug
   const baseUrl = normalizeBaseUrl(
     await ask("Jira base URL", {
       defaultValue: process.env.JIRA_BASE_URL?.trim() || "",
-      validate: (value) => (value ? undefined : "Required, e.g. your-company.atlassian.net")
+      validate: (value) =>
+        value ? baseUrlProblem(normalizeBaseUrl(value)) : "Required, e.g. your-company.atlassian.net"
     })
   );
 
@@ -341,7 +343,7 @@ async function addOne(cwd: string, printOnly: boolean): Promise<boolean> {
   return await confirm("Add another Jira instance?", false);
 }
 
-/** Entry point of the setup wizard (--print only outputs the JSON). */
+/** Entry point of the setup wizard (--print only outputs the JSON; --list and --remove manage entries). */
 async function main() {
   const major = Number(process.versions.node.split(".")[0]);
 
@@ -350,8 +352,21 @@ async function main() {
   }
 
   const cwd = process.cwd();
-  const args = new Set(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  const args = new Set(argv);
   const printOnly = args.has("--print");
+
+  if (args.has("--list")) {
+    log.title("jira-mcp-add --list");
+    process.exitCode = (await runList(cwd)) > 0 ? 1 : 0;
+    return;
+  }
+
+  if (args.has("--remove")) {
+    const next = argv[argv.indexOf("--remove") + 1];
+    await runRemove(cwd, next && !next.startsWith("--") ? next : undefined);
+    return;
+  }
 
   log.title("jira-mcp-add — read-only Jira MCP server setup");
   log.note(`Project: ${cwd}`);

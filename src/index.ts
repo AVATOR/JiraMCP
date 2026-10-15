@@ -62,6 +62,26 @@ function getDebugLog(): ((line: string) => void) | undefined {
   return flag === "1" || flag === "true" ? (line) => console.error(`[jira-mcp] ${line}`) : undefined;
 }
 
+/**
+ * Reads a non-negative integer from an environment variable.
+ *
+ * @param name Environment variable name.
+ * @returns The number, or undefined when unset; throws on invalid values.
+ */
+function getCountEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) {
+    return undefined;
+  }
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < 0) {
+    throw new Error(`${name} must be a whole number, 0 or more`);
+  }
+
+  return value;
+}
+
 /** Builds the server from the environment and serves it over stdio, or over HTTP with MCP_TRANSPORT=http. */
 async function main() {
   const config: JiraClientConfig = {
@@ -89,6 +109,7 @@ async function main() {
       host,
       port,
       token: process.env.MCP_HTTP_TOKEN?.trim() || undefined,
+      rateLimitPerMinute: getCountEnv("MCP_HTTP_RATE_LIMIT"),
       createServer: () => createServer(config, { caches, downloads: false, debugLog })
     });
     console.error(`jira-readonly-mcp listening on http://${host}:${running.port}/mcp`);

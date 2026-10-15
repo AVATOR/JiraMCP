@@ -3,11 +3,14 @@ import { unlink } from "node:fs/promises";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
 import type { ReadableStream as WebReadableStream } from "node:stream/web";
-import { basicAuthHeader } from "./auth.js";
+import { baseUrlProblem, basicAuthHeader } from "./auth.js";
 import type { JsonValue } from "./types.js";
 
 const REQUEST_TIMEOUT_MS = 30_000;
 const MAX_RETRIES = 3;
+// Everything one request may spend, retries and waiting included. MCP clients typically give up
+// after about a minute, so a longer budget only burns Atlassian quota for an answer nobody reads.
+export const REQUEST_DEADLINE_MS = 45_000;
 // Rate limiting and transient gateway errors; everything else is returned to the caller as-is.
 const RETRY_STATUSES = new Set([429, 502, 503, 504]);
 const MAX_ERROR_BODY_CHARS = 1000;
@@ -71,6 +74,11 @@ export class AtlassianHttp {
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly debugLog?: (line: string) => void
   ) {
+    const problem = baseUrlProblem(config.baseUrl);
+    if (problem) {
+      throw new Error(problem);
+    }
+
     this.baseUrl = config.baseUrl.replace(/\/$/, "");
     this.authHeader = basicAuthHeader(config.email, config.apiToken);
   }
@@ -96,6 +104,7 @@ export class AtlassianHttp {
    */
   private async send(url: URL, accept: string, body?: string): Promise<Response> {
     const method = body === undefined ? "GET" : "POST";
+    const deadline = Date.now() + REQUEST_DEADLINE_MS;
 
     for (let attempt = 0; ; attempt++) {
       const started = Date.now();
@@ -111,7 +120,7 @@ export class AtlassianHttp {
           },
           body,
           redirect: "follow",
-          signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS)
+          signal: AbortSignal.timeout(Math.max(1, Math.min(REQUEST_TIMEOUT_MS, deadline - Date.now())))
         });
       } catch (error) {
         this.log(method, url, `failed: ${error instanceof Error ? error.message : String(error)}`, started, attempt);
@@ -121,9 +130,14 @@ export class AtlassianHttp {
       this.log(method, url, String(response.status), started, attempt);
 
       if (RETRY_STATUSES.has(response.status) && attempt < MAX_RETRIES) {
-        await response.body?.cancel();
-        await sleep(retryDelayMs(response, attempt));
-        continue;
+        const delay = retryDelayMs(response, attempt);
+
+        // Waiting would run past the deadline: hand the failure to the caller now instead of sleeping.
+        if (Date.now() + delay < deadline) {
+          await response.body?.cancel();
+          await sleep(delay);
+          continue;
+        }
       }
 
       return response;
